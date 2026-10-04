@@ -33,9 +33,9 @@ def write_png(path, w, h, fn):
     return len(blob)
 
 
-def make(path, base, marks):
+def make(path, base, marks, size=(820, 300)):
     """base=底色, marks=要画的方块数（用来肉眼区分是哪张图）"""
-    w, h = 820, 300
+    w, h = size
 
     def px(x, y, w, h):
         # 边框
@@ -69,6 +69,8 @@ def main():
     total += make(os.path.join(OUT, 'img-01-blue.png'), (22, 112, 232), 1)
     total += make(os.path.join(OUT, 'img 02 with space.png'), (15, 138, 99), 2)
     total += make(os.path.join(OUT, '中文图片名-03.png'), (201, 105, 30), 3)
+    # 2 倍尺寸版本：专门给"相机查看器二级加载"的测试做对照（1640x600）
+    total += make(os.path.join(OUT, 'img-04-big.png'), (22, 112, 232), 4, (1640, 600))
     print('生成图片到', os.path.normpath(OUT))
     for n in sorted(os.listdir(OUT)):
         print('  %-28s %d 字节' % (n, os.path.getsize(os.path.join(OUT, n))))

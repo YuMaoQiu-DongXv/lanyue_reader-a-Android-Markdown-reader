@@ -32,6 +32,7 @@ function approx(a, b, tol) { return Math.abs(a - b) <= (tol === undefined ? 0.02
 
 var f = document.getElementById('f');
 var IMG = 'testdoc/test-images/img%2002%20with%20space.png';
+var IMG_BIG = 'testdoc/test-images/img-04-big.png';   // 1640x600，是 IMG 的两倍
 
 f.onload = function () { setTimeout(run, 1200); };
 
@@ -129,6 +130,54 @@ function run() {
     var back = Z.getState().scale;
     ok('再次双击还原到适应屏幕', approx(back, fit, 0.02), dbl.toFixed(3) + ' → ' + back.toFixed(3));
 
+    // ---------- transform 必须是 translate3d（独立合成层）----------
+    ok('transform 使用 translate3d（提升为合成层）',
+       /translate3d\(/.test(img.style.transform), img.style.transform);
+
+    // ---------- 缩放上限受"GPU 纹理预算"约束 ----------
+    var capped = Z.getState();
+    ok('缩放上限不超过纹理预算（<=3）', capped.maxScale <= 3.0001, 'maxScale=' + capped.maxScale);
+
+    // ---------- 两级加载：换更清晰的版本后，屏幕上的大小与中心不变 ----------
+    Z.close();
+    Z.open(IMG, IMG_BIG);
+    var w0 = 0;
+    (function waitSmall(n) {
+      if (!Z.isReady() && n < 30) return setTimeout(function () { waitSmall(n + 1); }, 100);
+      var a = Z.getState();
+      w0 = a.natW * a.scale;                       // 屏幕上实际宽度
+      var center0 = (a.vw / 2 - a.tx) / a.scale;   // 视图中心对应的图像坐标
+      Z.zoomAt(200, 300, 1.8);                     // 先放大一点，验证换图时也保持
+      var b = Z.getState();
+      var w1 = b.natW * b.scale;
+      var center1 = (b.vw / 2 - b.tx) / b.scale;
+      (function waitBig(n2) {
+        if (Z.getState().natW <= a.natW && n2 < 40) return setTimeout(function () { waitBig(n2 + 1); }, 100);
+        var t0 = Z.getState();
+        setTimeout(function () {
+        var c = Z.getState();
+        lines.push('      [timeline] 换图瞬间: natW=' + t0.natW + ' s=' + t0.scale.toFixed(4) + ' tx=' + t0.tx.toFixed(1) +
+                   ' | 400ms 后: natW=' + c.natW + ' s=' + c.scale.toFixed(4) + ' tx=' + c.tx.toFixed(1) +
+                   ' fit=' + c.fitScale.toFixed(4) + ' min=' + c.minScale.toFixed(4) + ' max=' + c.maxScale.toFixed(4));
+        ok('二级加载换成了更大的图', c.natW > a.natW, a.natW + ' → ' + c.natW);
+        ok('换图后屏幕显示尺寸不变', approx(c.natW * c.scale, w1, w1 * 0.02),
+           w1.toFixed(1) + ' → ' + (c.natW * c.scale).toFixed(1));
+        // 判据说明：图片比视口宽时，左边缘被钳制在 0（不许露白）——
+        // 此时"视图中心对应的图像点"必然随缩放变化，强行保持会让边缘露白。
+        // 所以合理的判据是"刚才在中心的那块内容没有跳走"：位移不超过视口的 25%。
+        var xBefore = b.tx + center1 * b.scale;      // 该图像点当时的屏幕横坐标（应约等于视口中心）
+        var xAfter = c.tx + center1 * c.scale;       // 换图后它跑到哪
+        ok('换图后画面不跳变（原中心内容位移 <= 视口 25%）',
+           Math.abs(xAfter - xBefore) <= c.vw * 0.25,
+           xBefore.toFixed(1) + ' → ' + xAfter.toFixed(1) + ' (vw=' + c.vw + ', 位移=' +
+           Math.abs(xAfter - xBefore).toFixed(1) + ')');
+        ok('img.src 已切到清晰版', (img.getAttribute('src') || '').indexOf('img-04-big') >= 0, img.getAttribute('src'));
+        continueRest();
+        }, 400);
+      })(0);
+    })(0);
+
+    function continueRest() {
     // ---------- 点图片不关闭 ----------
     fire(img, 'pointerdown', 31, 200, 350); fire(img, 'pointerup', 31, 200, 350);
     ok('单击图片本身不关闭（避免拖动误触）', Z.isOpen() === true);
@@ -140,6 +189,7 @@ function run() {
       ok('关闭后释放了图片引用', !img.getAttribute('src'));
       finish();
     }, 420);
+    }
   }
 }
 

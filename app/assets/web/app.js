@@ -724,8 +724,9 @@
       if (fo) { B.openFolder(); return; }
       var img = e.target.closest && e.target.closest('img');
       if (img && img.closest('#doc')) {
-        // 交给手势查看器：页面级缩放被 WebView 关掉了，双指缩放只能由页面自己实现
-        Zoom.open(hqSrc(img.getAttribute('src')));
+        // 交给手势查看器：第一级用正文里那张（已在缓存，瞬间出图），第二级异步换查看档
+        var ds = img.getAttribute('src');
+        Zoom.open(ds, hqSrc(ds));
         return;
       }
       var a = e.target.closest && e.target.closest('a');
@@ -793,6 +794,7 @@
     var pointers = {};          // pointerId -> {x,y}
     var pinch = null, pan = null, down = null;
     var lastTapAt = 0, lastTapX = 0, lastTapY = 0;
+    var closeTimer = 0;          // "单击空白处延迟关闭"的定时器，双击时必须取消
     var opened = false, ready = false;
 
     function init() {
@@ -820,13 +822,20 @@
       if (!natW || !natH) return;
       fitScale = Math.min(vw() / natW, vh() / natH, 1);
       minScale = fitScale;
-      maxScale = Math.max(2, Math.min(6, 4 / Math.max(0.001, fitScale) * 1));
-      // 说明：maxScale 取"原始像素的 4 倍"与 6 的较小值，避免 4K 图被放到离谱尺寸
-      maxScale = Math.min(6, Math.max(2, 4));
+      // 关键：把"渲染出来的图层宽度"限制在 ~4096 设备像素以内。
+      // 超过 GPU 纹理上限时，Chromium 的分块光栅化会来不及铺满，
+      // 表现就是真机截图里那种"矩形缺失 + 一卡一卡"。
+      var dpr = window.devicePixelRatio || 1;
+      var byTexture = 4096 / Math.max(1, natW * dpr);
+      maxScale = Math.min(3, byTexture);
+      if (maxScale < fitScale * 2.5) maxScale = fitScale * 2.5;   // 至少还能放大 2.5 倍
+      if (maxScale > 3) maxScale = 3;
     }
 
     function apply() {
-      img.style.transform = 'translate(' + tx.toFixed(2) + 'px,' + ty.toFixed(2) + 'px) scale(' + s.toFixed(4) + ')';
+      // 用 translate3d 而不是 translate2d：把图提升为独立合成层，
+      // 手势过程中由合成器直接变换已有纹理，不再逐帧重新光栅化（这是"缩放一卡一卡"的主因之一）。
+      img.style.transform = 'translate3d(' + tx.toFixed(2) + 'px,' + ty.toFixed(2) + 'px,0) scale(' + s.toFixed(4) + ')';
     }
 
     /**
@@ -866,27 +875,79 @@
       clampPan(); apply();
     }
 
-    function open(src) {
+    var token = 0;
+    var pendingHi = null;     // 待升级的"查看档"地址
+    var firstPass = true;     // 只有会话里的第一次加载才允许 reset（定初始视图）
+
+    function open(src, hiSrc) {
       if (!img || !lb) return;
+      var my = ++token;
       ready = false;
+      firstPass = true;
+      pendingHi = (hiSrc && hiSrc !== src) ? hiSrc : null;
       opened = true;
       natW = natH = 0;
       img.style.transform = 'none';
       lb.classList.add('show');
       img.onload = function () {
-        natW = img.naturalWidth || img.clientWidth;
-        natH = img.naturalHeight || img.clientHeight;
-        recomputeFit();
-        reset();
+        if (my !== token) return;
         ready = true;
+        if (firstPass) {
+          firstPass = false;
+          natW = img.naturalWidth || img.clientWidth;
+          natH = img.naturalHeight || img.clientHeight;
+          recomputeFit();
+          reset();
+          if (pendingHi) upgrade(my);
+          return;
+        }
+        // 后续加载（二级替换，或第一张图的迟到事件）：视图已定，只重算上限与钳制。
+        // 这里绝不能 reset()：否则用户刚放大的画面会被弹回"适应屏幕"。
+        recomputeFit();
+        clampPan();
+        apply();
       };
-      img.onerror = function () { ready = false; };
+      img.onerror = function () { if (my === token) ready = false; };
       img.src = src;
       if (img.complete && img.naturalWidth) img.onload();
     }
 
+    /**
+     * 第二级：把"查看档"（更清晰的版本）异步换上。
+     * 换图时保持"屏幕上看到的大小与中心"不变 —— 把视图中心对应的图像点算出来，
+     * 换图后按新图的像素数反算缩放与位移。
+     */
+    function upgrade(my) {
+      if (!pendingHi || !natW) return;      // 第一张还没加载完就等它加载完再调（见 onload）
+      var url = pendingHi;
+      var probe = new Image();
+      probe.onload = function () {
+        if (my !== token || !opened || url !== pendingHi) return;
+        var nW = probe.naturalWidth, nH = probe.naturalHeight;
+        if (!nW || !nH || nW <= natW) { pendingHi = null; return; }   // 没有更清晰就不动
+        var vcx = vw() / 2, vcy = vh() / 2;
+        var ix = (vcx - tx) / s, iy = (vcy - ty) / s;   // 视图中心对应的图像坐标
+        var k = natW / nW;
+        natW = nW;
+        natH = nH;
+        s = s * k;
+        tx = vcx - ix * s;
+        ty = vcy - iy * s;
+        recomputeFit();
+        clampPan();
+        pendingHi = null;
+        img.src = url;                                   // 走上面的"后续加载"分支
+        apply();
+      };
+      probe.src = url;
+    }
+
     function close() {
       if (!lb) return;
+      token++;                      // 让在途的第二级加载作废
+      pendingHi = null;
+      firstPass = true;
+      if (closeTimer) { clearTimeout(closeTimer); closeTimer = 0; }
       opened = false; ready = false;
       lb.classList.remove('show');
       pointers = {}; pinch = null; pan = null; down = null;
@@ -954,12 +1015,18 @@
           var now = Date.now();
           var isDouble = (now - lastTapAt < 300) && Math.abs(e.clientX - lastTapX) < 40 && Math.abs(e.clientY - lastTapY) < 40;
           if (isDouble) {
+            // 双击：必须撤掉第一次点击排下的"延迟关闭"，否则会出现
+            // "双击放大 → 300ms 后画面自己被关掉"这种诡异行为
+            if (closeTimer) { clearTimeout(closeTimer); closeTimer = 0; }
             lastTapAt = 0;
             if (s > minScale * 1.15) reset();
             else zoomAt(e.clientX, e.clientY, 2.5 / Math.max(0.001, s / Math.max(minScale, 0.0001)));
           } else {
             lastTapAt = now; lastTapX = e.clientX; lastTapY = e.clientY;
-            if (!was.onImg) setTimeout(function () { if (Date.now() - lastTapAt >= 280 && opened) close(); }, 300);
+            if (!was.onImg) {
+              if (closeTimer) clearTimeout(closeTimer);
+              closeTimer = setTimeout(function () { closeTimer = 0; if (opened) close(); }, 300);
+            }
           }
         }
         down = null;

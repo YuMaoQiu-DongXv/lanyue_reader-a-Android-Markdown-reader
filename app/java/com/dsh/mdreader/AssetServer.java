@@ -86,8 +86,11 @@ public final class AssetServer {
 
         if (path.startsWith("/img/")) {
             String rel = path.substring("/img/".length());
-            boolean hq = highQuality || query.contains("hq=1");
-            byte[] body = images != null ? images.load(rel, hq) : null;
+            // 档位：导出期间用原图；?hq=1（点开放大）用"查看档"（有上限，绝不给原图）；
+            // 其余是正文里的显示档。
+            int tier = highQuality ? ImageLoader.TIER_EXPORT
+                    : (query.contains("hq=1") ? ImageLoader.TIER_ZOOM : ImageLoader.TIER_DISPLAY);
+            byte[] body = images != null ? images.load(rel, tier) : null;
             if (body == null) {
                 android.util.Log.w("LanyueAsset", "IMG MISS " + rel + "（同级目录未授权或文件不存在）");
                 return notFound();
