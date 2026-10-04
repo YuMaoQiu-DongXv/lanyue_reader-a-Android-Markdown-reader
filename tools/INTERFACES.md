@@ -39,6 +39,9 @@ public final class Settings {
     public boolean isHqExport();        public void setHqExport(boolean v);
     public boolean isAllFilesAccess();  public void setAllFilesAccess(boolean v);
 
+    /** 当前生效的深浅色（theme=system 时跟随系统 uiMode）——主题解析只此一处 */
+    public boolean isDarkEffective(Context ctx);
+
     public String  get(String key, String def);
     public void    set(String key, String value);
 
@@ -87,7 +90,14 @@ public final class FileGate {
     public FileGate(Activity activity, Settings settings);
 
     public void openFile(DocCallback cb);          // ACTION_OPEN_DOCUMENT，mime text/markdown + text/*
-    public void openFolder(DocCallback cb);        // ACTION_OPEN_DOCUMENT_TREE，用于解析相对图片
+    /**
+     * ACTION_OPEN_DOCUMENT_TREE，用于解析相对图片。
+     * 语义约定（重要）：授权成功后**不改动当前文档**——
+     *   - 若当前有文档：把它重读一遍经 onDoc 回传（内容/docKey 不变，只是 resolveImage 多一条 tree 退路）；
+     *   - 若当前没有文档：静默成功（tree 已持久化到 Settings），不回传 onDoc。
+     * 这样调用方的"收到 onDoc 就整篇重渲染"逻辑不会被清空正文。
+     */
+    public void openFolder(DocCallback cb);
     public void openUri(Uri uri, String mime, DocCallback cb);
     public void saveAs(String suggestedName, String text, VoidCallback cb);  // ACTION_CREATE_DOCUMENT
     public boolean saveToCurrent(String text);     // 覆盖保存（canWrite 时），失败返回 false

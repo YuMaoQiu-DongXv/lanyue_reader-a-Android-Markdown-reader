@@ -335,7 +335,7 @@ public final class MainActivity extends Activity implements AssetServer.DocSourc
     @SuppressWarnings("deprecation")   // SYSTEM_UI_FLAG_LIGHT_STATUS_BAR 在 30 后被 WindowInsetsController 取代，
                                         // 但我们要兼容 minSdk 26，只能走这条兼容路径
     private void applyThemeToSystemBars() {
-        boolean dark = isDarkEffective();
+        boolean dark = settings.isDarkEffective(this);   // 主题解析只在 Settings 里实现一处，避免两套判断漂移
         View d = getWindow().getDecorView();
         int flags = d.getSystemUiVisibility();
         if (dark) {
@@ -346,16 +346,7 @@ public final class MainActivity extends Activity implements AssetServer.DocSourc
             if (Build.VERSION.SDK_INT >= 26) flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
         }
         d.setSystemUiVisibility(flags);
-        root.setBackgroundColor(color(dark ? R.color.bg : R.color.bg));
-    }
-
-    /** 当前生效的深浅色：theme=system 时跟随系统 uiMode */
-    private boolean isDarkEffective() {
-        String t = settings.getTheme();
-        if ("dark".equals(t)) return true;
-        if ("light".equals(t)) return false;
-        int night = getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK;
-        return night == Configuration.UI_MODE_NIGHT_YES;
+        root.setBackgroundColor(color(R.color.bg));
     }
 
     private int cssInsetTop() {
