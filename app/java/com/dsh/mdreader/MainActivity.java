@@ -615,8 +615,29 @@ public final class MainActivity extends Activity implements AssetServer.DocSourc
         files.saveAs(suggestedName(), text, (ok, msg) -> {
             if (ok) applySavedText(text);
             toast(msg);
-            if (ok) hideEditor();
+            if (ok) {
+                hideEditor();
+                adoptSavedCopy();
+            }
         });
+    }
+
+    /**
+     * 「另存为」成功之后，把新文件认作当前文档。
+     *
+     * 为什么必须做：FileGate.saveAs 成功时已把内部 currentUri 指向新文件（否则后续覆盖保存会写回旧文件），
+     * 但 MainActivity 这边的 fileName / canWrite / docKey 还停在旧文档上。不同步的后果是：
+     * 界面仍显示"只读，保存将另存为"，而下一次保存会因为 canWrite=false 再次走另存为 —— 反复产出新文件。
+     * 这里借 FileGate 写入的 lastDocUri 重新打开一次，把两侧状态对齐（文件此时可写，标题与位置记忆也随之更新）。
+     */
+    private void adoptSavedCopy() {
+        String last = settings.getLastDocUri();
+        if (last == null || last.isEmpty()) return;
+        try {
+            files.openUri(Uri.parse(last), "text/markdown", docCallback);
+        } catch (Exception e) {
+            Log.w(TAG, "adoptSavedCopy failed", e);
+        }
     }
 
     private void saveEditorSilently() {
@@ -701,7 +722,24 @@ public final class MainActivity extends Activity implements AssetServer.DocSourc
     }
 
     void doOpenFolder() {
-        files.openFolder(docCallback);
+        // 场景分流（这是接口缺"授权成功"专用回调导致的必要处理）：
+        //  - 阅读中：授权后让 FileGate 重读当前文档，图片立刻能显示 → 用 docCallback
+        //  - 首页：只想要授权，不应把用户拽回"上次打开过的那个文档" → 用静默回调
+        if (docUtf8 == null) {
+            files.openFolder(new FileGate.DocCallback() {
+                @Override
+                public void onDoc(FileGate.Doc doc) {
+                    toast("已授权该文件夹，文档内的图片将可直接显示");
+                }
+
+                @Override
+                public void onError(String msg) {
+                    toast(msg);
+                }
+            });
+        } else {
+            files.openFolder(docCallback);
+        }
     }
 
     void doOpenRecent(String uri) {
@@ -710,7 +748,10 @@ public final class MainActivity extends Activity implements AssetServer.DocSourc
     }
 
     void doSaveAs(String name, String text) {
-        files.saveAs(name == null || name.isEmpty() ? suggestedName() : name, text, (ok, msg) -> toast(msg));
+        files.saveAs(name == null || name.isEmpty() ? suggestedName() : name, text, (ok, msg) -> {
+            toast(msg);
+            if (ok) adoptSavedCopy();
+        });
     }
 
     boolean doSaveCurrent(String text) {
