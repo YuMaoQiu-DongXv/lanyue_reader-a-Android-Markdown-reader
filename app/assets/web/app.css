@@ -545,14 +545,23 @@ html[data-theme="dark"] .md .token.macro { color: #b9a2ff; }
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 
-/* 图片放大 */
+/* 图片放大（手势查看器）
+   注意两处关键：touch-action:none 阻止浏览器吞掉双指手势；overflow 交给 JS 变换处理，
+   不再用滚动容器（滚动容器下手指拖动与缩放会互相打架）。 */
 .lightbox {
   position: fixed; inset: 0; z-index: 70; background: rgba(8, 14, 26, .96);
-  display: none; align-items: center; justify-content: center;
-  overflow: auto; -webkit-overflow-scrolling: touch;
+  display: none; align-items: flex-start; justify-content: flex-start;
+  overflow: hidden; touch-action: none; overscroll-behavior: contain;
+  user-select: none; -webkit-user-select: none;
 }
 .lightbox.show { display: flex; }
-.lightbox img { max-width: none; width: auto; border-radius: 4px; }
+.lightbox img {
+  max-width: none; max-height: none; width: auto; height: auto;
+  border-radius: 4px; transform-origin: 0 0;   /* 与 JS 的 translate+scale 换算一致 */
+  will-change: transform; -webkit-user-drag: none; user-select: none;
+}
+.lightbox.dragging img { transition: none; }
+.lightbox img { transition: transform .16s ease-out; }
 .lightbox .close {
   position: fixed; top: calc(10px + var(--inset-top)); right: 12px;
   width: 38px; height: 38px; border-radius: 50%; color: #fff;

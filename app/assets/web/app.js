@@ -89,6 +89,7 @@
     if (state.hasDoc && state.docUrl) loadDoc();
     else renderHome();
     wireEvents();
+    Zoom.init();
   }
 
   function applyChrome(s) {
@@ -696,8 +697,8 @@
     bindTap('search-prev', function () { stepHit(-1); });
     bindTap('search-next', function () { stepHit(1); });
     bindTap('scrim', closePanels);
-    bindTap('lightbox', function () { $('lightbox').classList.remove('show'); });
-    bindTap('lightbox-close', function () { $('lightbox').classList.remove('show'); });
+    // 关闭入口：关闭按钮 + "点空白处"（由查看器内部判定）。点图片本身不关，避免拖动时误触。
+    bindTap('lightbox-close', function () { Zoom.close(); });
 
     var si = $('search-input');
     var t = 0;
@@ -723,9 +724,8 @@
       if (fo) { B.openFolder(); return; }
       var img = e.target.closest && e.target.closest('img');
       if (img && img.closest('#doc')) {
-        var lb = $('lightbox');
-        $('lightbox-img').src = hqSrc(img.getAttribute('src'));
-        lb.classList.add('show');
+        // 交给手势查看器：页面级缩放被 WebView 关掉了，双指缩放只能由页面自己实现
+        Zoom.open(hqSrc(img.getAttribute('src')));
         return;
       }
       var a = e.target.closest && e.target.closest('a');
@@ -772,6 +772,218 @@
     document.body.removeChild(ta);
   }
 
+
+  /* ================================================================
+     图片查看器（lightbox）
+     为什么必须自己实现：WebView 侧为了保住固定顶栏与排版，关掉了页面级缩放
+     （viewport 里 user-scalable=no + setSupportZoom(false)），所以浏览器自带的
+     双指缩放根本不会生效 —— 只能由页面自己处理手势。
+     实现要点：
+       · touch-action:none + Pointer Events，避免浏览器把双指手势吞掉
+       · transform: translate(tx,ty) scale(s)，transform-origin: 0 0，换算直观
+       · 缩放锚定在手指中点（捏合时那个点不动），并跟随中点位移平移
+       · 单指拖动平移；双击在"适应屏幕↔放大"之间切换；滚轮缩放（桌面/无头测试）
+       · 平移做钳制：图比屏幕小就居中，比屏幕大就不允许拖出边界
+     ================================================================ */
+  var Zoom = (function () {
+    var lb, img;
+    var s = 1, tx = 0, ty = 0;
+    var fitScale = 1, minScale = 1, maxScale = 4;   // 上限 4× 原始像素
+    var natW = 0, natH = 0;
+    var pointers = {};          // pointerId -> {x,y}
+    var pinch = null, pan = null, down = null;
+    var lastTapAt = 0, lastTapX = 0, lastTapY = 0;
+    var opened = false, ready = false;
+
+    function init() {
+      lb = $('lightbox');
+      img = $('lightbox-img');
+      if (!lb || !img) return;
+      lb.addEventListener('pointerdown', onDown, { passive: false });
+      lb.addEventListener('pointermove', onMove, { passive: false });
+      lb.addEventListener('pointerup', onUp);
+      lb.addEventListener('pointercancel', onUp);
+      lb.addEventListener('wheel', onWheel, { passive: false });
+      window.addEventListener('resize', function () { if (opened) { recomputeFit(); reset(); } });
+      document.addEventListener('keydown', function (e) {
+        if (!opened) return;
+        if (e.key === 'Escape') close();
+        if (e.key === '+' || e.key === '=') zoomAt(vw() / 2, vh() / 2, 1.3);
+        if (e.key === '-') zoomAt(vw() / 2, vh() / 2, 1 / 1.3);
+      });
+    }
+
+    function vw() { return lb ? lb.clientWidth : window.innerWidth; }
+    function vh() { return lb ? lb.clientHeight : window.innerHeight; }
+
+    function recomputeFit() {
+      if (!natW || !natH) return;
+      fitScale = Math.min(vw() / natW, vh() / natH, 1);
+      minScale = fitScale;
+      maxScale = Math.max(2, Math.min(6, 4 / Math.max(0.001, fitScale) * 1));
+      // 说明：maxScale 取"原始像素的 4 倍"与 6 的较小值，避免 4K 图被放到离谱尺寸
+      maxScale = Math.min(6, Math.max(2, 4));
+    }
+
+    function apply() {
+      img.style.transform = 'translate(' + tx.toFixed(2) + 'px,' + ty.toFixed(2) + 'px) scale(' + s.toFixed(4) + ')';
+    }
+
+    /**
+     * 平移钳制。
+     * 关键取舍：图比屏幕小的轴**不强制居中**，只限制"别拖出视口"（tx ∈ [0, W-w]）；
+     * 图比屏幕大的轴则限制"不许露白"（tx ∈ [W-w, 0]）。
+     * 曾经对小图强制居中，结果双指缩放时锚点被拉回中间（纵向漂移近百像素）——
+     * 用户会觉得"缩放不跟手"。居中只发生在打开与双击还原时。
+     */
+    function clampPan() {
+      var w = natW * s, h = natH * s, W = vw(), H = vh();
+      tx = (w <= W) ? Math.min(Math.max(tx, 0), W - w) : Math.min(0, Math.max(W - w, tx));
+      ty = (h <= H) ? Math.min(Math.max(ty, 0), H - h) : Math.min(0, Math.max(H - h, ty));
+    }
+
+    /** 以屏幕上 (cx,cy) 为锚点缩放 factor 倍 */
+    function zoomAt(cx, cy, factor) {
+      var ns = Math.min(maxScale, Math.max(minScale, s * factor));
+      var k = ns / s;
+      tx = cx - (cx - tx) * k;
+      ty = cy - (cy - ty) * k;
+      s = ns;
+      clampPan();
+      apply();
+      return s;
+    }
+
+    function reset() {
+      s = fitScale;
+      tx = (vw() - natW * s) / 2;
+      ty = (vh() - natH * s) / 2;
+      apply();
+    }
+
+    function panBy(dx, dy) {
+      tx += dx; ty += dy;
+      clampPan(); apply();
+    }
+
+    function open(src) {
+      if (!img || !lb) return;
+      ready = false;
+      opened = true;
+      natW = natH = 0;
+      img.style.transform = 'none';
+      lb.classList.add('show');
+      img.onload = function () {
+        natW = img.naturalWidth || img.clientWidth;
+        natH = img.naturalHeight || img.clientHeight;
+        recomputeFit();
+        reset();
+        ready = true;
+      };
+      img.onerror = function () { ready = false; };
+      img.src = src;
+      if (img.complete && img.naturalWidth) img.onload();
+    }
+
+    function close() {
+      if (!lb) return;
+      opened = false; ready = false;
+      lb.classList.remove('show');
+      pointers = {}; pinch = null; pan = null; down = null;
+      img.style.transform = 'none';
+      img.removeAttribute('src');   // 释放大图（4K 图长期驻留很占内存）
+    }
+
+    function mid() {
+      var ids = Object.keys(pointers);
+      if (ids.length < 2) return null;
+      var a = pointers[ids[0]], b = pointers[ids[1]];
+      return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, d: Math.hypot(a.x - b.x, a.y - b.y) };
+    }
+
+    function onDown(e) {
+      if (!opened) return;
+      try { if (lb.setPointerCapture) lb.setPointerCapture(e.pointerId); } catch (err) {
+        // 合成事件/个别 WebView 实现下会抛 NotFoundError —— 抓不到捕获不影响手势
+      }
+      pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+      var ids = Object.keys(pointers);
+      if (ids.length === 2) {
+        var m = mid();
+        pinch = { d: m.d, x: m.x, y: m.y, s: s, tx: tx, ty: ty };
+        pan = null;
+      } else if (ids.length === 1) {
+        down = { x: e.clientX, y: e.clientY, t: Date.now(), tx: tx, ty: ty, moved: false, onImg: !!e.target.closest('img') };
+        pan = down;
+      }
+      e.preventDefault();
+    }
+
+    function onMove(e) {
+      if (!opened || !pointers[e.pointerId]) return;
+      pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+      var ids = Object.keys(pointers);
+      if (ids.length >= 2) {
+        var m = mid();
+        if (!pinch) { pinch = { d: m.d, x: m.x, y: m.y, s: s, tx: tx, ty: ty }; }
+        var factor = pinch.d > 0 ? (m.d / pinch.d) : 1;
+        var ns = Math.min(maxScale, Math.max(minScale, pinch.s * factor));
+        var k = ns / pinch.s;
+        tx = pinch.x - (pinch.x - pinch.tx) * k + (m.x - pinch.x);
+        ty = pinch.y - (pinch.y - pinch.ty) * k + (m.y - pinch.y);
+        s = ns;
+        clampPan(); apply();
+      } else if (pan) {
+        var dx = e.clientX - pan.x, dy = e.clientY - pan.y;
+        if (Math.abs(dx) > 4 || Math.abs(dy) > 4) pan.moved = true;
+        tx = pan.tx + dx; ty = pan.ty + dy;
+        clampPan(); apply();
+      }
+      e.preventDefault();
+    }
+
+    function onUp(e) {
+      if (!opened) return;
+      var was = down;
+      delete pointers[e.pointerId];
+      var ids = Object.keys(pointers);
+      if (ids.length < 2) pinch = null;
+      if (ids.length === 0) {
+        pan = null;
+        if (was && !was.moved && Date.now() - was.t < 320) {
+          var now = Date.now();
+          var isDouble = (now - lastTapAt < 300) && Math.abs(e.clientX - lastTapX) < 40 && Math.abs(e.clientY - lastTapY) < 40;
+          if (isDouble) {
+            lastTapAt = 0;
+            if (s > minScale * 1.15) reset();
+            else zoomAt(e.clientX, e.clientY, 2.5 / Math.max(0.001, s / Math.max(minScale, 0.0001)));
+          } else {
+            lastTapAt = now; lastTapX = e.clientX; lastTapY = e.clientY;
+            if (!was.onImg) setTimeout(function () { if (Date.now() - lastTapAt >= 280 && opened) close(); }, 300);
+          }
+        }
+        down = null;
+      }
+    }
+
+    function onWheel(e) {
+      if (!opened) return;
+      e.preventDefault();
+      var factor = Math.pow(1.0015, -e.deltaY);
+      zoomAt(e.clientX, e.clientY, factor);
+    }
+
+    return {
+      init: init, open: open, close: close, zoomAt: zoomAt, panBy: panBy, reset: reset,
+      isOpen: function () { return opened; },
+      isReady: function () { return ready; },
+      getState: function () {
+        return { open: opened, ready: ready, scale: s, tx: tx, ty: ty, fitScale: fitScale,
+                 minScale: minScale, maxScale: maxScale, natW: natW, natH: natH, vw: vw(), vh: vh() };
+      }
+    };
+  })();
+
   /* ---------------- 供原生调用 ---------------- */
   window.LanyueApp = {
     applyState: function (json) {
@@ -789,7 +1001,7 @@
     },
     /** 返回键：先关灯箱、再关面板；返回 true 表示"我处理掉了" */
     back: function () {
-      if ($('lightbox').classList.contains('show')) { $('lightbox').classList.remove('show'); return true; }
+      if (Zoom.isOpen()) { Zoom.close(); return true; }
       if ($('toc').classList.contains('show') || $('search').classList.contains('show') || $('sheet').classList.contains('show')) {
         closePanels();
         return true;
@@ -798,7 +1010,7 @@
     },
     goHome: function () {
       closePanels();
-      $('lightbox').classList.remove('show');
+      Zoom.close();
       renderHome();
       try { B.viewChanged('home'); } catch (e) {}
       return true;
@@ -836,6 +1048,8 @@
     else if (k === 'act-share') { closePanels(); B.shareLast(); }
     else if (k === 'act-close') closePanels();
   });
+
+  window.LanyueZoom = Zoom;      // 供无头测试驱动
 
   /* ---------------- 工具 ---------------- */
   function esc(s) {
