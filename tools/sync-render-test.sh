@@ -15,6 +15,8 @@ cp -f "$ROOT/mdreader/tools/rendertest/test.html" "$DST/test.html"
 cp -f "$ROOT/mdreader/tools/rendertest/formula.html" "$DST/formula.html"
 cp -f "$ROOT/mdreader/tools/rendertest/code.html" "$DST/code.html"
 cp -f "$ROOT/mdreader/tools/rendertest/layout.html" "$DST/layout.html"
+rm -rf "$DST/testdoc" && cp -r "$ROOT/mdreader/testdoc" "$DST/testdoc"
+cp -f "$DST/testdoc/蓝阅验收测试.md" "$DST/testdoc/acceptance.md"
 echo "synced -> $DST"
 ls -1 "$DST"
 if [ "$1" = "serve" ]; then

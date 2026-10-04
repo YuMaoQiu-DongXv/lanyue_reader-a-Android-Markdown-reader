@@ -23,6 +23,8 @@
 <script>
 var WIDTHS = [320, 360, 393, 412, 600];
 var TARGET = 'index.html?doc=sample/sample.md&imgbase=./sample/&theme=light';
+// 首页单独探一次：长文件名历史上会溢出卡片（行内元素上的 ellipsis 无效）
+var TARGET_HOME = 'index.html?recent=8&theme=light';
 var f = document.getElementById('f');
 var out = document.getElementById('out');
 var results = [], i = 0;
@@ -45,6 +47,17 @@ function measure(win) {
     var r = b.getBoundingClientRect();
     btns.push(b.id.replace('btn-', '') + (b.hidden ? '(hidden)' : '') + ':' + Math.round(r.left) + '..' + Math.round(r.right));
   });
+  // 首页卡片专项：名字必须被省略号截断（scrollWidth > clientWidth 且没有 hidden 就是溢出）
+  var nameOverflow = [];
+  Array.prototype.forEach.call(d.querySelectorAll('.recent-item .name, .recent-item .when'), function (el) {
+    var cs = getComputedStyle(el);
+    if (el.scrollWidth > el.clientWidth + 1 && cs.textOverflow !== 'ellipsis') {
+      nameOverflow.push(el.className + ':' + el.scrollWidth + '>' + el.clientWidth);
+    }
+    if (el.scrollWidth > el.clientWidth + 1 && cs.overflow !== 'hidden') {
+      nameOverflow.push('no-hidden:' + el.className);
+    }
+  });
   var more = d.getElementById('btn-more');
   var moreR = more ? more.getBoundingClientRect() : null;
   return {
@@ -54,6 +67,7 @@ function measure(win) {
     barButtons: btns.join(' '),
     moreVisible: moreR ? (moreR.right <= vw + 1 && moreR.left >= 0 && moreR.width > 0) : false,
     offenders: bad,
+    nameOverflow: nameOverflow,
     codeBlocks: d.querySelectorAll('.code-block').length,
     katex: d.querySelectorAll('.katex').length,
     images: d.querySelectorAll('#doc img').length
@@ -61,7 +75,7 @@ function measure(win) {
 }
 
 function step() {
-  if (i >= WIDTHS.length) return finish();
+  if (i >= WIDTHS.length) return finishHome();
   var w = WIDTHS[i];
   f.style.width = w + 'px';
   f.onload = function () {
@@ -87,11 +101,52 @@ function step() {
   f.src = TARGET;
 }
 
+function finishHome() {
+  var w = 360;
+  f.style.width = w + 'px';
+  f.onload = function () {
+    setTimeout(function () {
+      try {
+        var win = f.contentWindow, d = win.document, de = d.documentElement;
+        var vw = de.clientWidth;
+        var out = [];
+        var item = d.querySelector('.recent-item');
+        if (!item) { out.push('没有最近文件条目（mock 未生效）'); }
+        else {
+          var name = item.querySelector('.name'), open = item.querySelector('.open');
+          var ir = item.getBoundingClientRect(), nr = name.getBoundingClientRect(), or = open ? open.getBoundingClientRect() : null;
+          var cs = win.getComputedStyle(name);
+          var truncated = name.scrollWidth > name.clientWidth && cs.textOverflow === 'ellipsis' && cs.overflow === 'hidden';
+          var openInside = or && or.right <= ir.right + 1 && or.right <= vw + 1;
+          var leftAligned = cs.textAlign === 'left' || cs.textAlign === 'start';
+          out.push('item=' + Math.round(ir.left) + '..' + Math.round(ir.right) + ' vw=' + vw);
+          out.push('name=' + Math.round(nr.left) + '..' + Math.round(nr.right) + ' 截断=' + (truncated ? 'OK' : 'FAIL') +
+                   ' 左对齐=' + (leftAligned ? 'OK' : 'FAIL') + ' align=' + cs.textAlign);
+          out.push('箭头=' + (or ? (Math.round(or.left) + '..' + Math.round(or.right) + ' 可见=' + (openInside ? 'OK' : 'FAIL')) : '无'));
+          out.push('溢出=' + (de.scrollWidth > vw + 1 ? 'FAIL sw=' + de.scrollWidth : 'OK'));
+        }
+        outText = out.join(' | ');
+        document.getElementById('out').insertAdjacentHTML('beforeend',
+          '<div class="row"><span class="lbl">首页（8 条最近文件，360px）</span> → ' + outText + '</div>');
+        homeDetail = outText;
+      } catch (e) {
+        homeDetail = 'ERR ' + e;
+        document.getElementById('out').insertAdjacentHTML('beforeend', '<div class="row bad">首页测量失败：' + e + '</div>');
+      }
+      finish();
+    }, 1600);
+  };
+  f.src = TARGET_HOME;
+}
+
+var homeDetail = '';
 function finish() {
   var bad = results.filter(function (r) { return !r.m || r.m.hOverflow || !r.m.moreVisible || r.m.offenders.length; });
+  if (/FAIL|ERR|没有/.test(homeDetail)) bad.push({ w: 'HOME', detail: homeDetail });
   var v = document.getElementById('verdict');
   v.textContent = (bad.length ? 'LAYOUT FAIL' : 'LAYOUT PASS') + ' widths=' + WIDTHS.join(',') +
     ' fail=' + bad.length + (bad.length ? ' detail=' + JSON.stringify(bad) : '') +
+    ' | HOME=' + homeDetail +
     ' | summary=' + results.map(function (r) {
       return r.w + ':vw' + (r.m ? r.m.vw : '?') + '/sw' + (r.m ? r.m.scrollW : '?') + '/more' + (r.m ? (r.m.moreVisible ? 'ok' : 'NO') : '?');
     }).join(' ');

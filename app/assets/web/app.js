@@ -33,7 +33,21 @@
       fontScale: 1,
       insets: { top: 0, bottom: 0 },
       settings: { autosave: true, hqExport: false, allFilesAccess: false },
-      recent: [],
+      recent: (function () {
+        var n = parseInt(params.get('recent') || '0', 10);
+        var out = [];
+        for (var i = 0; i < n; i++) {
+          out.push({
+            uri: 'content://mock/doc/' + i,
+            name: (i % 3 === 0)
+              ? '从零开始搓一个黑洞——glsl编程实战-Baopinsui的文章（超长文件名测试）.md'
+              : (i % 3 === 1 ? '拿得起更难立论_3.md' : '蓝阅验收测试.md'),
+            size: 81462,
+            when: '2026-10-04 19:' + (10 + i)
+          });
+        }
+        return out;
+      })(),
       appVersion: 'dev-mock',
       webview: navigator.userAgent
     };
@@ -48,11 +62,13 @@
     };
     window.__MOCK__ = true;
     window.__MOCK_GO = params.get('go') || '';
+    window.__MOCK_GO_TEXT = params.get('goText') || '';
   }
   function noop() {}
 
   /* ---------------- 状态 ---------------- */
   var state = null;
+  var currentView = 'home';      // 'home' | 'doc'：顶栏据此决定显示返回箭头还是应用名
   var sourceText = '';
   var pipelineResult = null;
   var chunks = [], renderedChunks = 0, chunkSentinels = [];
@@ -80,8 +96,11 @@
     document.documentElement.style.setProperty('--inset-top', (s.insets && s.insets.top || 0) + 'px');
     document.documentElement.style.setProperty('--inset-bottom', (s.insets && s.insets.bottom || 0) + 'px');
     document.documentElement.style.setProperty('--font-scale', String(s.fontScale || 1));
-    $('doc-title').textContent = s.hasDoc && s.fileName ? s.fileName : '蓝阅';
-    $('btn-home').hidden = !s.hasDoc;
+    // 只有正在看文档时才显示文件名与返回箭头。否则 Android 侧每次状态推送（onResume、
+    // 设置变更、导出回调）都会把首页顶栏改回“文件名 + 返回箭头”。
+    var viewing = (currentView === 'doc') && s.hasDoc;
+    $('doc-title').textContent = viewing && s.fileName ? s.fileName : '蓝阅';
+    $('btn-home').hidden = !viewing;
   }
 
   function resolveTheme(s) {
@@ -95,7 +114,9 @@
   /* ---------------- 首页 ---------------- */
   function renderHome() {
     doc.hidden = true; home.hidden = false;
+    currentView = 'home';
     $('doc-title').textContent = '蓝阅';
+    $('btn-home').hidden = true;
     try { B.viewChanged('home'); } catch (e) {}
     $('pct').classList.remove('show');
     $('btn-home').hidden = true;
@@ -268,7 +289,13 @@
           ignoredClasses: ['no-math'],
           throwOnError: false,
           strict: false,
-          trust: false,
+          // KaTeX 默认不信任"上色"类命令（它们会写出 style 属性）→ 一律判解析失败，
+          // 样本文档作者用来做重点标记的 '$\color{red}{...}$' 就会整段变成红色报错原文。
+          // 只放行上色命令，仍然拒绝 '\\href'/'\\url'/'\\includegraphics' 这类会引入外部 URL 的命令。
+          trust: function (ctx) {
+            var c = ctx && ctx.command;
+            return c === '\\color' || c === '\\textcolor' || c === '\\colorbox' || c === '\\fcolorbox';
+          },
           errorColor: '#d64545',
           macros: { '\\RR': '\\mathbb{R}' }
         });
@@ -285,7 +312,15 @@
       var goEl = document.getElementById(window.__MOCK_GO);
       if (goEl) goEl.scrollIntoView({ block: 'start' });
     }
+    if (window.__MOCK__ && window.__MOCK_GO_TEXT) {
+      var want = window.__MOCK_GO_TEXT;
+      var hs = doc.querySelectorAll('h1,h2,h3,h4');
+      for (var hi = 0; hi < hs.length; hi++) {
+        if (hs[hi].textContent.indexOf(want) >= 0) { hs[hi].scrollIntoView({ block: 'start' }); break; }
+      }
+    }
     updateLayout();
+    currentView = 'doc';
     try { B.viewChanged('doc'); } catch (e) {}
     var stats = {
       chars: sourceText.length,
@@ -349,8 +384,9 @@
       var fb = document.createElement('span');
       fb.className = 'img-fallback';
       fb.innerHTML = '<b>图片无法显示：' + esc(rel) + '</b>' +
-        '文档引用了同目录（或相对路径）的图片。若文件是从文件管理器直接打开的，应用可能拿不到该目录的读取授权。' +
-        '<button type="button" data-folder>授权该文件夹</button>';
+        '文档引用了同目录（或相对路径）的图片。从文件管理器点开<b>单个文件</b>时，系统只授权了这一个文件，' +
+        '应用拿不到同目录图片的权限 —— 需要授权它所在的<b>文件夹</b>。' +
+        '<button type="button" data-folder>授权该文件夹（请选文档所在的目录）</button>';
       if (el.parentNode) el.parentNode.replaceChild(fb, el);
     }, true);
   }

@@ -29,12 +29,20 @@ if (params.get('theme')) document.documentElement.setAttribute('data-theme', par
 var SRC = [
   '# 公式渲染与字体自查',
   '',
+  '**着色命令放在最前面**（无头截图只能拍到页首，而 \color 正是上次变红的那一条）：',
+  '',
+  '此时， $\\color{red}{若我们的目标是绘制一个没有在吸积物质的黑洞，那我们已经做得够好了}$ ，甚至比接下来的效果还要好。',
+  '',
+  '蓝色与绿色：$\\textcolor{blue}{这是蓝色文字}$、$\\textcolor{green}{这是绿色文字}$。',
+  '',
+  '',
   '行内公式：质能方程 $E = mc^2$，下标上标 $a_i^2$，希腊字母 $\\alpha\\beta\\gamma\\theta\\lambda\\pi$。',
   '',
   '样本里那处嵌在段落中间的公式（原文形态）：而黑体谱，就是无数单色光的合成。Planck分布$$u_{T}(\\lambda)=\\frac{8 \\pi h c}{\\lambda^{5}} \\frac{1}{e^{\\frac{h c}{\\lambda k T}}-1}$$只需对 Planck 分布积分即可。',
   '',
   '强调语法干扰项（数学里含 `*` 与 `_`）：$Projection*Rotation*Translation$ 与 $a_{b_c}$。',
   '',
+  '着色命令（KaTeX 默认不信任 \color，必须显式放行，否则整段变红色报错原文）：$\\color{red}{这段必须是红字}$ 与 $\\textcolor{blue}{这段必须是蓝字}$。',
   '非法公式的降级（应显示为红色原文，不崩）：$a_b_c$。',
   '',
   '矩阵与括号：',
@@ -82,6 +90,22 @@ var errs = Array.prototype.map.call(document.querySelectorAll('.katex-error'), f
 // 字体是异步加载的，必须等 fonts.ready 之后再判定，否则永远是 false（假阴性）。
 // 另外主动 load 每一档，以证明 20 个 woff2 文件在设备上全都可达（APK assets 里最容易 404 的就是它们）。
 function report() {
+  // \color 是否被放行：这两段必须是 .katex（不是 .katex-error）
+  // 只查"文本出现在 .katex 里"是不够的：反斜杠若被 JS 吃掉，"color{red}{X}" 也会被当成
+  // 合法数学式渲染出来（只是不变红）。必须查**计算颜色**。
+  function colorOf(text) {
+    var found = null;
+    Array.prototype.forEach.call(document.querySelectorAll('.katex'), function (el) {
+      if ((el.textContent || '').indexOf(text) >= 0) found = el;
+    });
+    return found ? getComputedStyle(found).color : 'missing';
+  }
+  function isRed(c) { var m = /rgb\((\d+), (\d+), (\d+)\)/.exec(c); return !!m && +m[1] > 140 && +m[2] < 110 && +m[3] < 110; }
+  function isBlue(c) { var m = /rgb\((\d+), (\d+), (\d+)\)/.exec(c); return !!m && +m[3] > 120 && +m[1] < 110; }
+  var redColor = colorOf('这段必须是红字'), blueColor = colorOf('这段必须是蓝字');
+  var redOk = isRed(redColor), blueOk = isBlue(blueColor);
+  var colorInfo = ' | COLOR red=' + (redOk ? 'OK' : 'FAIL') + '(' + redColor + ')'
+    + ' blue=' + (blueOk ? 'OK' : 'FAIL') + '(' + blueColor + ')';
   var jobs = families.map(function (f) {
     return document.fonts.load('16px "' + f + '"').catch(function () { return null; });
   });
@@ -98,7 +122,7 @@ function report() {
     verdict.style.cssText = 'position:fixed;left:-9999px';
     verdict.textContent = 'FONTS loaded=' + (families.length - missing.length) + '/' + families.length +
       ' missing=[' + missing.join(',') + '] katex=' + katexCount +
-      ' errors=' + errs.length + (errs.length ? ' detail=' + errs.join(' | ') : '');
+      ' errors=' + errs.length + (errs.length ? ' detail=' + errs.join(' | ') : '') + colorInfo;
     document.body.appendChild(verdict);
   });
 }

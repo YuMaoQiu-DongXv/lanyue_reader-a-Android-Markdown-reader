@@ -246,13 +246,30 @@ public final class FileGate {
             // 1) 兄弟文档：相对当前文档所在目录
             Uri sib = siblingUri(currentUri, r);
             if (sib != null && isReadable(sib)) {
+                android.util.Log.i("LanyueImg", "OK(sibling) " + r);
                 return sib;
             }
             // 2) 回退：已授权 tree 内的相对路径
-            Uri inTree = treeChildUri(getAuthorizedTreeUri(), r);
+            String treeStr = getAuthorizedTreeUri();
+            Uri inTree = treeChildUri(treeStr, r);
             if (inTree != null && isReadable(inTree)) {
+                android.util.Log.i("LanyueImg", "OK(tree) " + r);
                 return inTree;
             }
+            // 2b) 用户授权的很可能不是"文档所在目录"而是它的**祖先目录**（比如选了上一级）。
+            //     这种时候按拼接路径必然失败，于是在已授权目录树里按"目录名 + 文件名"递归搜一次。
+            Uri deep = searchTreeBySuffix(treeStr, r);
+            if (deep != null && isReadable(deep)) {
+                android.util.Log.i("LanyueImg", "OK(tree-deep) " + r + "（授权的是祖先目录，已递归找到）");
+                return deep;
+            }
+            // 失败时把两条链路的确切状态打出来（真机排查全靠它）
+            android.util.Log.w("LanyueImg", "FAIL " + r
+                    + " | docUri=" + (currentUri == null ? "none" : "set")
+                    + " siblingUri=" + (sib == null ? "构造失败(云盘类 provider 的 documentId 非路径形态)" : "构造成功但不可读(单文件授权不含同级)")
+                    + " | treeUri=" + (treeStr == null || treeStr.isEmpty() ? "未授权" : "已授权")
+                    + " treeChild=" + (inTree == null ? "构造失败" : "构造成功但不可读"));
+            return null; // 3) 都不行
         }
         return null; // 3) 都不行
     }
@@ -687,6 +704,78 @@ public final class FileGate {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    /**
+     * 在已授权目录树里按"目录名 + 文件名"递归查找 relPath。
+     *
+     * 存在理由：用户点"授权该文件夹"时很可能选中的是文档所在目录的**祖先**（例如上一层）。
+     * 那时按 rootId + rel 拼出来的路径指向不存在的文档，图片依然加载不出来 —— 这一层就是为此兜底。
+     * 约束：BFS、最多 600 个条目、最多 6 层，找不到就返回 null（不抛异常）。
+     */
+    private Uri searchTreeBySuffix(String treeUriStr, String rel) {
+        if (treeUriStr == null || treeUriStr.isEmpty() || rel == null || rel.isEmpty()) {
+            return null;
+        }
+        int slash = rel.lastIndexOf('/');
+        final String wantDir = (slash > 0) ? rel.substring(0, slash) : "";     // 例如 "images"
+        final String wantFile = (slash >= 0) ? rel.substring(slash + 1) : rel;  // 例如 "001.png"
+        try {
+            Uri tree = Uri.parse(treeUriStr);
+            String rootId = DocumentsContract.getTreeDocumentId(tree);
+            if (rootId == null || rootId.isEmpty()) {
+                return null;
+            }
+            java.util.ArrayDeque<String[]> queue = new java.util.ArrayDeque<String[]>();
+            java.util.HashSet<String> seen = new java.util.HashSet<String>();
+            queue.add(new String[]{rootId, ""});            // {documentId, 该目录名}
+            int visited = 0;
+            while (!queue.isEmpty() && visited < 600) {
+                String[] cur = queue.poll();
+                if (!seen.add(cur[0])) {
+                    continue;
+                }
+                Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, cur[0]);
+                Cursor c = null;
+                try {
+                    c = resolver.query(children, new String[]{
+                            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                            DocumentsContract.Document.COLUMN_MIME_TYPE}, null, null, null);
+                    while (c != null && c.moveToNext()) {
+                        visited++;
+                        String id = c.getString(0);
+                        String name = c.getString(1);
+                        String mime = c.getString(2);
+                        if (id == null) {
+                            continue;
+                        }
+                        if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
+                            queue.add(new String[]{id, name == null ? "" : name});
+                            continue;
+                        }
+                        if (name == null || !name.equals(wantFile)) {
+                            continue;
+                        }
+                        // 文件名相同还不够：rel 带目录前缀时必须连父目录名也对上
+                        if (wantDir.isEmpty()
+                                || wantDir.equals(cur[1])
+                                || wantDir.endsWith("/" + cur[1])
+                                || cur[1].isEmpty()) {
+                            Uri cand = DocumentsContract.buildDocumentUriUsingTree(tree, id);
+                            if (isReadable(cand)) {
+                                return cand;
+                            }
+                        }
+                    }
+                } finally {
+                    closeQuietly(c);
+                }
+            }
+        } catch (Throwable t) {
+            // 只是最后一层兜底，失败就让它失败（上层会显示"授权该文件夹"占位块）
+        }
+        return null;
     }
 
     /**

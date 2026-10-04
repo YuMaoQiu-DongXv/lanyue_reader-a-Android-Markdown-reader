@@ -81,9 +81,7 @@ public final class AssetServer {
         if ("/doc.md".equals(path)) {
             byte[] body = docSource != null ? docSource.docBytes() : null;
             if (body == null) body = "文档未打开".getBytes();
-            Map<String, String> h = new HashMap<String, String>();
-            h.put("Cache-Control", "no-store");
-            return response("text/markdown", "utf-8", body, h);
+            return response("text/markdown", "utf-8", body, null);
         }
 
         if (path.startsWith("/img/")) {
@@ -104,7 +102,7 @@ public final class AssetServer {
             return notFound();
         }
         String mime = mimeOf(assetPath);
-        return new WebResourceResponse(mime, isText(mime) ? "utf-8" : null, 200, "OK", null, in);
+        return new WebResourceResponse(mime, isText(mime) ? "utf-8" : null, 200, "OK", noStore(null), in);
     }
 
     /**
@@ -127,12 +125,26 @@ public final class AssetServer {
         }
     }
 
+    /**
+     * 统一附加 no-store。
+     *
+     * 这一步不是洁癖，是必要的：图片第一次请求失败会返回 404，而 Chromium 对没有缓存头的
+     * 响应会做启发式缓存 —— 用户随后"授权文件夹"再重新渲染时，同一个图片 URL 可能直接命中
+     * 那个缓存的 404，于是**永远显示不出来**。全量禁缓存后，授权后重新渲染必定重新请求。
+     */
+    private static Map<String, String> noStore(Map<String, String> extra) {
+        Map<String, String> h = (extra == null) ? new HashMap<String, String>() : extra;
+        h.put("Cache-Control", "no-store, no-cache, must-revalidate");
+        h.put("Pragma", "no-cache");
+        return h;
+    }
+
     private static WebResourceResponse response(String mime, String encoding, byte[] body, Map<String, String> headers) {
-        return new WebResourceResponse(mime, encoding, 200, "OK", headers, new ByteArrayInputStream(body));
+        return new WebResourceResponse(mime, encoding, 200, "OK", noStore(headers), new ByteArrayInputStream(body));
     }
 
     private static WebResourceResponse notFound() {
-        return new WebResourceResponse("text/plain", "utf-8", 404, "Not Found", null,
+        return new WebResourceResponse("text/plain", "utf-8", 404, "Not Found", noStore(null),
                 new ByteArrayInputStream("404".getBytes()));
     }
 

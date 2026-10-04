@@ -123,6 +123,20 @@ function box(el) {
   var r = el.getBoundingClientRect();
   return [Math.round(r.left), Math.round(r.right), Math.round(r.width)].join('/');
 }
+// 关键断言（上一版就是漏了这条）：不仅要有 token，还要**颜色真的不一样**。
+// 曾经 app.css 里一条 .token 规则都没有，DOM 里 211 个 token 全在、数量断言全过，
+// 但渲染出来是一片同色 —— 看起来就是"完全没高亮"。
+var colorHist = {};
+Array.prototype.forEach.call(document.querySelectorAll('.code-block .token'), function (t) {
+  var c = getComputedStyle(t).color;
+  colorHist[c] = (colorHist[c] || 0) + 1;
+});
+var distinctColors = Object.keys(colorHist).length;
+var kw = document.querySelector('.code-block .token.keyword');
+var kwColor = kw ? getComputedStyle(kw).color : 'none';
+var cm = document.querySelector('.code-block .token.comment');
+var cmColor = cm ? getComputedStyle(cm).color : 'none';
+
 var overflowers = [];
 Array.prototype.forEach.call(document.querySelectorAll('body *'), function (el) {
   var r = el.getBoundingClientRect();
@@ -135,7 +149,10 @@ verdict.textContent = 'CODES blocks=' + blocks.length + ' tokens=' + highlighted
   ' copyButtons=' + document.querySelectorAll('.copy[data-copy]').length + ' | LAYOUT vw=' + de.clientWidth +
   ' scrollW=' + de.scrollWidth + ' body=' + box(document.body) + ' md=' + box(md) +
   ' codeHead=' + box(head0) + ' pre=' + box(pre0) + ' copy=' + box(copy0) +
-  ' | OVERFLOW=' + (overflowers.length ? overflowers.slice(0, 6).join(',') : 'none');
+  ' | OVERFLOW=' + (overflowers.length ? overflowers.slice(0, 6).join(',') : 'none') +
+  ' | COLORS distinct=' + distinctColors + ' keyword=' + kwColor + ' comment=' + cmColor +
+  (distinctColors >= 5 ? ' HIGHLIGHT-OK' : ' HIGHLIGHT-BROKEN') +
+  ' ' + JSON.stringify(colorHist);
 document.body.appendChild(verdict);
 </script>
 </body>

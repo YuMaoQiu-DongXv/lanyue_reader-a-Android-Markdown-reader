@@ -177,6 +177,10 @@ img { max-width: 100%; height: auto; }
   transition: background .15s ease, border-color .15s ease;
 }
 .recent-item:active { background: var(--primary-soft); border-color: var(--primary-line); }
+/* <button> 默认 text-align:center —— 不显式左对齐，短文件名会诡异地居中 */
+.recent-item { text-align: left; width: 100%; font-family: inherit; }
+.recent-item .meta { text-align: left; }
+.recent-item .open { flex: 0 0 auto; }
 .recent-item .dot {
   width: 34px; height: 34px; flex: 0 0 34px; border-radius: 9px;
   background: var(--primary-soft); color: var(--primary);
@@ -184,11 +188,17 @@ img { max-width: 100%; height: auto; }
   font-size: 13px; font-weight: 700;
 }
 .recent-item .meta { min-width: 0; flex: 1; }
+/* 这些元素必须是块级：<span> 是行内元素，行内元素上的 overflow/text-overflow 一律无效，
+   长文件名会直接溢出卡片（真机 bug：文件名冲出屏幕、日期被挤到名字后面同一行）。 */
+.recent-item .meta { display: block; min-width: 0; overflow: hidden; }
 .recent-item .name {
-  font-size: 14px; font-weight: 600;
+  display: block; font-size: 14px; font-weight: 600;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.recent-item .when { font-size: 12px; color: var(--text-faint); margin-top: 2px; }
+.recent-item .when {
+  display: block; font-size: 12px; color: var(--text-faint); margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .recent-item .open { color: var(--text-faint); font-size: 18px; }
 
 .home .tip {
@@ -312,6 +322,59 @@ img { max-width: 100%; height: auto; }
   border-radius: 0 0 var(--radius) var(--radius);
 }
 
+/* 代码高亮配色（Prism token）
+   注意：这一段曾经整个漏掉 —— DOM 里 token 都在、数量也对，但没有任何颜色规则，
+   渲染出来就是一片同色文本，看起来"完全没高亮"。教训：验证高亮必须查计算样式，不能只数 token。 */
+.md .token.comment, .md .token.prolog, .md .token.doctype, .md .token.cdata {
+  color: #7c8ba1; font-style: italic;
+}
+.md .token.punctuation { color: #64748b; }
+.md .token.property, .md .token.tag, .md .token.constant, .md .token.symbol,
+.md .token.deleted, .md .token.number, .md .token.boolean { color: #b3541e; }
+.md .token.selector, .md .token.attr-name, .md .token.string, .md .token.char,
+.md .token.builtin, .md .token.inserted { color: #0f8a63; }
+.md .token.operator, .md .token.entity, .md .token.url { color: #4b5c74; }
+.md .token.atrule, .md .token.attr-value, .md .token.keyword { color: #1668e8; font-weight: 600; }
+.md .token.function, .md .token.class-name { color: #7a3fbf; }
+.md .token.regex, .md .token.important, .md .token.variable { color: #c2410c; }
+.md .token.directive-hash, .md .token.directive, .md .token.macro { color: #8b5cf6; }
+.md .token.expression { color: inherit; }
+.md .token.important, .md .token.bold { font-weight: 700; }
+.md .token.italic { font-style: italic; }
+
+html[data-theme="dark"] .md .token.comment,
+html[data-theme="dark"] .md .token.prolog,
+html[data-theme="dark"] .md .token.doctype,
+html[data-theme="dark"] .md .token.cdata { color: #7d8ea6; }
+html[data-theme="dark"] .md .token.punctuation { color: #94a6bf; }
+html[data-theme="dark"] .md .token.property,
+html[data-theme="dark"] .md .token.tag,
+html[data-theme="dark"] .md .token.constant,
+html[data-theme="dark"] .md .token.symbol,
+html[data-theme="dark"] .md .token.deleted,
+html[data-theme="dark"] .md .token.number,
+html[data-theme="dark"] .md .token.boolean { color: #ffab70; }
+html[data-theme="dark"] .md .token.selector,
+html[data-theme="dark"] .md .token.attr-name,
+html[data-theme="dark"] .md .token.string,
+html[data-theme="dark"] .md .token.char,
+html[data-theme="dark"] .md .token.builtin,
+html[data-theme="dark"] .md .token.inserted { color: #6fd39a; }
+html[data-theme="dark"] .md .token.operator,
+html[data-theme="dark"] .md .token.entity,
+html[data-theme="dark"] .md .token.url { color: #a9bcd4; }
+html[data-theme="dark"] .md .token.atrule,
+html[data-theme="dark"] .md .token.attr-value,
+html[data-theme="dark"] .md .token.keyword { color: #6fa8ff; }
+html[data-theme="dark"] .md .token.function,
+html[data-theme="dark"] .md .token.class-name { color: #c39cff; }
+html[data-theme="dark"] .md .token.regex,
+html[data-theme="dark"] .md .token.important,
+html[data-theme="dark"] .md .token.variable { color: #ff9a7a; }
+html[data-theme="dark"] .md .token.directive-hash,
+html[data-theme="dark"] .md .token.directive,
+html[data-theme="dark"] .md .token.macro { color: #b9a2ff; }
+
 /* 数学 */
 .md .katex { font-size: 1.06em; }
 .md .katex-display {
@@ -319,7 +382,10 @@ img { max-width: 100%; height: auto; }
   overflow-x: auto; overflow-y: hidden;
 }
 .md .katex-display > .katex { white-space: normal; }
-.md .katex-error { color: var(--danger) !important; font-family: var(--mono-font); font-size: .9em; }
+.md .katex-error {
+  color: var(--danger) !important; font-family: var(--mono-font); font-size: .9em;
+  overflow-wrap: anywhere; word-break: break-all;   /* 报错原文可能是超长无空格串 */
+}
 
 /* 脚注 */
 .md .footnotes {
@@ -530,7 +596,8 @@ html.exporting body { padding-top: 0 !important; }
   .code-head .copy, .img-fallback button, .home { display: none !important; }
   .md { max-width: none; padding: 0; font-size: 10.5pt; line-height: 1.65; color: #000; }
   .md a { color: #000; text-decoration: none; }
-  .md a[href^="http"]::after { content: " (" attr(href) ")"; font-size: 8pt; color: #555; word-break: break-all; }
+  /* 曾经这里给每个 http 链接补印 " (url)"。对含几十个链接的文档（样本有 75 个）会糊满整页网址，
+     且把正常排版冲垮 —— 已删除。链接在 PDF 里就按普通文字排版。 */
   .md h1, .md h2 { border-bottom-color: #ccc; }
   .md pre, .md table, .md blockquote, .md .katex-display, .md img, .md .code-block, .fm-card {
     break-inside: avoid; page-break-inside: avoid;
