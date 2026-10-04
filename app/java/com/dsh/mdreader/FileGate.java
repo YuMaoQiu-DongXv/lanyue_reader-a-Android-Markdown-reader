@@ -280,30 +280,17 @@ public final class FileGate {
         }
         Uri data = intent.getData();
         Uri stream = extraStream(intent);
-        String action = intent.getAction();
-        Uri target;
-        if (Intent.ACTION_VIEW.equals(action) || Intent.ACTION_EDIT.equals(action)) {
-            target = (data != null) ? data : stream;
-        } else {
-            target = (data != null) ? data : stream;
-        }
+        // ACTION_VIEW / ACTION_EDIT 走 getData()，ACTION_SEND 走 EXTRA_STREAM；两者都缺才报错
+        Uri target = (data != null) ? data : stream;
         if (target == null) {
             cb.onError("没有可用的文件");
             return;
         }
-        if ("file".equals(target.getScheme())) {
-            // file:// 没有 SAF 授权，读写都不受控；仍然允许只读打开（兼容老应用分享）
-            try {
-                takePermission(target);
-            } catch (Exception ignore) {
-                // 非致命
-            }
-        } else {
-            try {
-                takePermission(target);
-            } catch (Exception ignore) {
-                // 外部 Intent 的临时授权通常不能持久化，失败非致命
-            }
+        // 外部 Intent 的授权通常是临时的、不可持久化（file:// 更是必然失败）→ 一律非致命
+        try {
+            takePermission(target);
+        } catch (Exception ignore) {
+            // 非致命
         }
         openUri(target, intent.getType(), cb);
     }
@@ -522,9 +509,9 @@ public final class FileGate {
     }
 
     /**
-     * 实测可写：先用 DocumentsContract 的 FLAG_SUPPORTS_WRITE 读一次，
-     * 再无条件用 {@code openFileDescriptor(uri,"rw")} 真开一次——只有真开成功才算可写
-     * （很多 provider 的 flag 与实际权限不一致）。全程 catch，绝不外抛。
+     * 实测可写：直接 {@code openFileDescriptor(uri, "rw")} 真开一次，只有真开成功才算可写。
+     * 刻意不信任 DocumentsContract 的 FLAG_SUPPORTS_WRITE —— 不少 provider 的 flag 与实际权限
+     * 不一致，真开一次才是权威判定。全程 catch Throwable，绝不外抛。
      */
     private boolean testWritable(Uri uri) {
         if (uri == null) {
@@ -791,9 +778,6 @@ public final class FileGate {
             sb.append(c < 0x20 ? '_' : c);
         }
         s = sb.toString().trim();
-        while (s.startsWith(".") && s.length() > 1 && !s.toLowerCase(Locale.US).endsWith(".md")) {
-            break; // 保留隐藏名，不做额外处理
-        }
         if (s.length() == 0) {
             s = "untitled";
         }

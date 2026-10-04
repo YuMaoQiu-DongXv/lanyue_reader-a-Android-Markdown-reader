@@ -24,6 +24,7 @@ import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.webkit.ConsoleMessage;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
@@ -82,6 +83,7 @@ public final class MainActivity extends Activity implements AssetServer.DocSourc
     private AssetServer assets;
     private Exporter exporter;
 
+    private View fatalView;
     private boolean editorVisible = false;
     private boolean editorDirty = false;
     private String editorOriginal = "";
@@ -216,6 +218,16 @@ public final class MainActivity extends Activity implements AssetServer.DocSourc
             }
 
             @Override
+            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                // 最坏失败模式是"白屏且没有任何线索"。这里把它变成可读的原生错误页。
+                if (request != null && request.isForMainFrame()) {
+                    showFatal("页面加载失败：错误码 " + error.getErrorCode() + "，"
+                            + (error.getDescription() == null ? "" : error.getDescription())
+                            + "。若反复出现，请执行 adb logcat -s LanyueAsset:LanyueWeb");
+                }
+            }
+
+            @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 Uri u = request.getUrl();
                 if (u == null) return false;
@@ -234,6 +246,36 @@ public final class MainActivity extends Activity implements AssetServer.DocSourc
             }
         });
         return w;
+    }
+
+    /** 原生错误页：只在主框架加载失败时出现，避免"白屏无提示" */
+    private void showFatal(String message) {
+        Log.e(TAG, message);
+        if (fatalView != null) {
+            ((TextView) ((LinearLayout) fatalView).getChildAt(0)).setText(message);
+            return;
+        }
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setBackgroundColor(color(R.color.bg));
+        col.setPadding(dp(24), dp(48) + insetTopPx, dp(24), dp(24));
+        TextView t = new TextView(this);
+        t.setText(message);
+        t.setTextSize(14);
+        t.setTextColor(color(R.color.text));
+        Button retry = flatButton("重新加载", 15);
+        retry.setTextColor(color(R.color.primary));
+        retry.setPadding(dp(12), dp(10), dp(12), dp(10));
+        retry.setOnClickListener(v -> {
+            root.removeView(col);
+            fatalView = null;
+            web.loadUrl(AssetServer.INDEX);
+        });
+        col.addView(t);
+        col.addView(retry);
+        fatalView = col;
+        root.addView(col, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }
 
     private void openExternal(String url) {

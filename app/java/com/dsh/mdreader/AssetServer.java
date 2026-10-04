@@ -11,6 +11,7 @@ import java.io.UnsupportedEncodingException;
 import java.net.URLDecoder;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 把 https://appassets.local/ 的全部请求就地应答，不产生任何真实网络访问。
@@ -38,6 +39,7 @@ public final class AssetServer {
     private final Context ctx;
     private final DocSource docSource;
     private final ImageLoader images;
+    private final AtomicInteger hits = new AtomicInteger();
     private volatile boolean highQuality = false;
 
     public AssetServer(Context ctx, DocSource docSource, ImageLoader images) {
@@ -71,6 +73,11 @@ public final class AssetServer {
         path = decode(path);
         if (path.isEmpty() || "/".equals(path)) path = "/index.html";
 
+        // 真机排查用证据：前 8 次拦截逐条打印，之后的 404 也会告警。
+        // 若页面白屏，先看 adb logcat -s LanyueAsset，就能判断到底是没被拦截、还是资源没找到。
+        int n = hits.incrementAndGet();
+        if (n <= 8) android.util.Log.i("LanyueAsset", "INTERCEPT #" + n + " " + path);
+
         if ("/doc.md".equals(path)) {
             byte[] body = docSource != null ? docSource.docBytes() : null;
             if (body == null) body = "文档未打开".getBytes();
@@ -83,13 +90,19 @@ public final class AssetServer {
             String rel = path.substring("/img/".length());
             boolean hq = highQuality || query.contains("hq=1");
             byte[] body = images != null ? images.load(rel, hq) : null;
-            if (body == null) return notFound();
+            if (body == null) {
+                android.util.Log.w("LanyueAsset", "IMG MISS " + rel + "（同级目录未授权或文件不存在）");
+                return notFound();
+            }
             return response(mimeOf(rel), null, body, null);
         }
 
         String assetPath = path.startsWith("/") ? path.substring(1) : path;
         InputStream in = openAsset(assetPath);
-        if (in == null) return notFound();
+        if (in == null) {
+            android.util.Log.w("LanyueAsset", "ASSET MISS " + assetPath);
+            return notFound();
+        }
         String mime = mimeOf(assetPath);
         return new WebResourceResponse(mime, isText(mime) ? "utf-8" : null, 200, "OK", null, in);
     }
