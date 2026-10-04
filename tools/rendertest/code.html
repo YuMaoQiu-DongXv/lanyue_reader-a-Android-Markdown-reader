@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>蓝阅 · 代码块与高亮自查</title>
+<link rel="stylesheet" href="app.css">
+<style>body { padding-bottom: 30px; }</style>
+</head>
+<body>
+<article id="doc" class="md"></article>
+
+<script src="vendor/marked/marked.umd.js"></script>
+<script src="vendor/prism/prism-core.min.js"></script>
+<script src="vendor/prism/prism-markup.min.js"></script>
+<script src="vendor/prism/prism-css.min.js"></script>
+<script src="vendor/prism/prism-clike.min.js"></script>
+<script src="vendor/prism/prism-javascript.min.js"></script>
+<script src="vendor/prism/prism-typescript.min.js"></script>
+<script src="vendor/prism/prism-python.min.js"></script>
+<script src="vendor/prism/prism-java.min.js"></script>
+<script src="vendor/prism/prism-c.min.js"></script>
+<script src="vendor/prism/prism-cpp.min.js"></script>
+<script src="vendor/prism/prism-csharp.min.js"></script>
+<script src="vendor/prism/prism-json.min.js"></script>
+<script src="vendor/prism/prism-bash.min.js"></script>
+<script src="vendor/prism/prism-markdown.min.js"></script>
+<script src="vendor/prism/prism-sql.min.js"></script>
+<script src="vendor/prism/prism-yaml.min.js"></script>
+<script src="vendor/prism/prism-glsl.min.js"></script>
+<script src="vendor/prism/prism-rust.min.js"></script>
+<script src="vendor/prism/prism-go.min.js"></script>
+<script src="pipeline.js"></script>
+<script>
+var params = new URLSearchParams(location.search);
+if (params.get('theme')) document.documentElement.setAttribute('data-theme', params.get('theme'));
+
+var SRC = [
+  '# 代码块与高亮自查',
+  '',
+  'GLSL（37 个块的样本语言，必须高亮）：',
+  '',
+  '```glsl',
+  '// 施瓦西黑洞光线追踪',
+  '#version 330 core',
+  'uniform vec3 uCamPos;',
+  'const float RS = 1.0;      // 史瓦西半径',
+  '',
+  'vec3 trace(vec3 pos, vec3 dir) {',
+  '    float h2 = length(cross(pos, dir));',
+  '    for (int i = 0; i < 256; i++) {',
+  '        float r = length(pos);',
+  '        if (r < RS) return vec3(0.0);',
+  '        vec3 acc = -1.5 * h2 * pos / pow(r, 5.0);',
+  '        dir += acc * 0.02; pos += dir * 0.02;',
+  '    }',
+  '    return texture(uSky, dir).rgb;',
+  '}',
+  '```',
+  '',
+  'Python：',
+  '',
+  '```python',
+  'def planck(lam, T):',
+  '    """黑体辐射"""',
+  '    h, c, k = 6.626e-34, 3e8, 1.381e-23',
+  '    return (8 * math.pi * h * c / lam**5) / (math.exp(h * c / (lam * k * T)) - 1)',
+  '```',
+  '',
+  'JavaScript：',
+  '',
+  '```javascript',
+  'const render = async (file) => {',
+  '  const text = await (await fetch(file)).text();',
+  '  return { name: file, size: text.length > 1024 ? "big" : "small" };',
+  '};',
+  '```',
+  '',
+  'JSON 与 YAML：',
+  '',
+  '```json',
+  '{ "name": "蓝阅", "size": 524288, "offline": true, "langs": ["glsl", "rust"] }',
+  '```',
+  '',
+  '```yaml',
+  'app: lanyue',
+  'minSdk: 26',
+  'features: [katex, prism, mhchem]',
+  '```',
+  '',
+  '超长行（必须横向滚动，不撑破布局）：',
+  '',
+  '```bash',
+  'adb install -r /d/DSH\\ program/mdreader/dist/lanyue-1.0.0-release.apk && adb shell am start -n com.dsh.mdreader/.MainActivity --es file /sdcard/Download/从零开始搓一个黑洞——glsl编程实战-Baopinsui的文章.md',
+  '```',
+  '',
+  '无语言围栏：',
+  '',
+  '```',
+  'plain text block — 没有语言标签',
+  '```',
+  '',
+  '未知语言（应退化为无色等宽）：',
+  '',
+  '```brainfuck',
+  '++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.',
+  '```'
+].join('\n');
+
+var res = window.LanyuePipeline.render(SRC, { imgBase: './' });
+document.getElementById('doc').innerHTML = res.html;
+if (window.Prism) Prism.highlightAllUnder(document.getElementById('doc'));
+
+var blocks = document.querySelectorAll('.code-block');
+var highlighted = document.querySelectorAll('.code-block .token');
+var de = document.documentElement;
+var md = document.getElementById('doc');
+var head0 = document.querySelector('.code-head');
+var pre0 = document.querySelector('pre');
+var copy0 = document.querySelector('.copy');
+function box(el) {
+  if (!el) return 'null';
+  var r = el.getBoundingClientRect();
+  return [Math.round(r.left), Math.round(r.right), Math.round(r.width)].join('/');
+}
+var overflowers = [];
+Array.prototype.forEach.call(document.querySelectorAll('body *'), function (el) {
+  var r = el.getBoundingClientRect();
+  if (r.right > de.clientWidth + 1) overflowers.push(el.tagName.toLowerCase() + '.' + (el.className || '').toString().split(' ')[0] + '@' + Math.round(r.right));
+});
+var verdict = document.createElement('div');
+verdict.id = 'verdict';
+verdict.style.cssText = 'position:fixed;left:-9999px';
+verdict.textContent = 'CODES blocks=' + blocks.length + ' tokens=' + highlighted.length +
+  ' copyButtons=' + document.querySelectorAll('.copy[data-copy]').length + ' | LAYOUT vw=' + de.clientWidth +
+  ' scrollW=' + de.scrollWidth + ' body=' + box(document.body) + ' md=' + box(md) +
+  ' codeHead=' + box(head0) + ' pre=' + box(pre0) + ' copy=' + box(copy0) +
+  ' | OVERFLOW=' + (overflowers.length ? overflowers.slice(0, 6).join(',') : 'none');
+document.body.appendChild(verdict);
+</script>
+</body>
+</html>

@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>蓝阅 · 渲染流水线断言测试</title>
+<style>
+  body { font: 13px/1.6 ui-monospace, Consolas, monospace; margin: 0; padding: 14px; background: #101827; color: #d6e2f5; }
+  h1 { font-size: 15px; margin: 0 0 10px; color: #7fb2ff; }
+  .sum { padding: 8px 10px; border-radius: 6px; margin-bottom: 12px; font-weight: 700; }
+  .sum.pass { background: #10361f; color: #6ee7a8; }
+  .sum.fail { background: #3a1212; color: #ff9a9a; }
+  pre { white-space: pre-wrap; word-break: break-all; margin: 0; }
+  .p { color: #6ee7a8; }
+  .f { color: #ff9a9a; font-weight: 700; }
+  #dump { margin-top: 16px; max-height: 260px; overflow: auto; border: 1px solid #24406b; padding: 8px; border-radius: 6px; background: #0b1220; }
+</style>
+</head>
+<body>
+<h1>蓝阅 · 渲染流水线断言测试</h1>
+<div class="sum" id="sum">running…</div>
+<pre id="results"></pre>
+<div id="mount" style="display:none"></div>
+<div id="dump"></div>
+
+<script src="vendor/marked/marked.umd.js"></script>
+<script src="pipeline.js"></script>
+<script>
+var lines = [], pass = 0, fail = 0;
+function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+function ok(name, cond, extra) {
+  if (cond) { pass++; lines.push('PASS  ' + name); }
+  else { fail++; lines.push('FAIL  ' + name + (extra !== undefined ? '   >> ' + String(extra).slice(0, 300) : '')); }
+}
+function R(md, opts) { return window.LanyuePipeline.render(md, opts || { imgBase: 'https://appassets.local/img/' }); }
+function mount(html) { var d = document.createElement('div'); d.innerHTML = html; document.getElementById('mount').appendChild(d); return d; }
+function has(html, needle) { return html.indexOf(needle) >= 0; }
+function fenceBalanced(chunk) { return ((chunk.match(/^ {0,3}(```|~~~)/gm) || []).length % 2) === 0; }
+
+/* ---------- 1. front matter ---------- */
+var fmDoc = '---\nid: "20536269771"\ntitle: "从零开始搓一个黑洞"\nauthor: Baopinsui\nsource: "https://example.com/a"\ncreated: "2025-01-29 20:00"\nupdated: "2026-05-03 01:58"\ndownloaded: "2026-08-23"\n---\n正文开始\n';
+var r1 = R(fmDoc);
+ok('front matter: 解析出 7 行', r1.frontMatter && r1.frontMatter.rows.length === 7, r1.frontMatter && r1.frontMatter.rows.length);
+ok('front matter: title 正确且去引号', r1.frontMatter && r1.frontMatter.title === '从零开始搓一个黑洞', r1.frontMatter && r1.frontMatter.title);
+ok('front matter: author 正确', r1.frontMatter && r1.frontMatter.author === 'Baopinsui', r1.frontMatter && r1.frontMatter.author);
+ok('front matter: date 优先取 updated（而非 created）', r1.frontMatter && r1.frontMatter.date === '2026-05-03 01:58', r1.frontMatter && r1.frontMatter.date);
+ok('front matter: 来源正确', r1.frontMatter && r1.frontMatter.source === 'https://example.com/a', r1.frontMatter && r1.frontMatter.source);
+ok('front matter: 正文保留', has(r1.html, '正文开始'));
+var noFm = R('没有头部\n\n---\n\n中间的分隔线\n');
+ok('front matter: 无头部时不当成 front matter', noFm.frontMatter === null, JSON.stringify(noFm.frontMatter));
+
+/* ---------- 2. 段落中的 $$ 块（最高风险） ---------- */
+var mid = R('而黑体谱，就是无数单色光的合成。Planck分布$$u_{T}(\\lambda)=\\frac{8 \\pi h c}{\\lambda^{5}}$$只需对Planck分布积分，就可以得到XYZ颜色。\n');
+var midFlat = mid.html.replace(/\n/g, '');
+ok('嵌段公式: $$ 被拆成独立块', /<p>而黑体谱[^<]*<\/p>\s*<p>\$\$u_\{T\}/.test(midFlat), midFlat.slice(0, 260));
+ok('嵌段公式: 后半句独立成段', /<\/p>\s*<p>只需对Planck分布积分/.test(midFlat), midFlat.slice(0, 260));
+var sameLine = R('前$$a+b$$后\n');
+ok('嵌段公式: 前后补空行使 marked 分段', /<p>前<\/p>[\s\S]*<p>\$\$a\+b\$\$<\/p>[\s\S]*<p>后<\/p>/.test(sameLine.html.replace(/\n/g, '')), sameLine.html);
+var alreadyBlock = R('段落一\n\n$$\nE = mc^2\n$$\n\n段落二\n');
+ok('嵌段公式: 本来就是独立块时保持原样', has(alreadyBlock.html, '$$') && has(alreadyBlock.html, 'E = mc^2'), alreadyBlock.html.slice(0, 200));
+
+/* ---------- 3. 分隔符归一化与保护区 ---------- */
+var mathSafe = R('公式 $a^2_b$ 与 $x_{i}^{2}$ 以及 ==高亮== 文本\n');
+ok('保护区: 公式内 ^ 未被转成 sup', has(mathSafe.html, '$a^2_b$'), mathSafe.html);
+ok('保护区: 公式内 _ 未被改动', has(mathSafe.html, '$x_{i}^{2}$'), mathSafe.html);
+ok('保护区: 公式外的 ==高亮== 生效', has(mathSafe.html, '<mark>高亮</mark>'), mathSafe.html);
+var dispMath = R('$$\n\\ce{2H2 + O2 -> 2H2O}\n$$\n');
+ok('保护区: $$ 块内 \\ce 内容完整保留', has(dispMath.html, '\\ce{2H2 + O2') && has(dispMath.html, '2H2O}'), dispMath.html);
+ok('保护区: $$ 块独立成段（不在段落中间）', /<p>\$\$[\s\S]*?<\/p>/.test(dispMath.html), dispMath.html);
+var parenMath = R('行内 \\(a_i^2\\) 与 \\[b^2\\] 结束\n');
+ok('分隔符: \\(...\\) 归一化为 $...$（反斜杠不被 marked 吃掉）', has(parenMath.html, '$a_i^2$'), parenMath.html);
+ok('分隔符: \\[...\\] 归一化为 $$...$$ 且独立成块', has(parenMath.html, '$$b^2$$') && /<\/p>[\s\S]*<p>\$\$b\^2\$\$<\/p>/.test(parenMath.html.replace(/\n/g, '')), parenMath.html);
+
+/* ---------- 3b. 数学必须躲开 marked 的强调语法（样本真实踩过） ---------- */
+var emMath = R('矩阵 $Projection*Rotation*Translation$ 与 $a_b_c$ 结束\n');
+ok('数学: 数学内的 * 不被 marked 当成强调', !has(emMath.html, '<em>') && has(emMath.html, '$Projection*Rotation*Translation$'), emMath.html);
+ok('数学: 数学内的 _ 不被 marked 当成强调', has(emMath.html, '$a_b_c$'), emMath.html);
+var dispStar = R('$$a*b*c$$\n');
+ok('数学: $$ 块内的 * 安全', has(dispStar.html, '$$a*b*c$$') && !has(dispStar.html, '<em>'), dispStar.html);
+var mathCount = R('$a$ 与 $$b$$ 与 $c$ 与 \\(d\\)\n');
+ok('数学: 占位符全部被还原', mathCount.stats.math === 4 && mathCount.stats.mathRestored === 4, JSON.stringify(mathCount.stats));
+ok('数学: 还原后无占位符残留', !has(mathCount.html, '%%LMD'), mathCount.html);
+
+/* ---------- 4. 代码保护区 ---------- */
+var rc = R('```glsl\n// ==不是高亮== 且 a^2^ 与 [^1]\nvec3 c = vec3(1.0);\n```\n\n正文 ==真高亮==\n');
+ok('代码块: 围栏内容原样保留', has(rc.html, '==不是高亮==') && has(rc.html, 'a^2^') && has(rc.html, '[^1]'), rc.html.slice(0, 200));
+ok('代码块: 正文高亮仍生效', has(rc.html, '<mark>真高亮</mark>'), rc.html.slice(-200));
+ok('代码块: language 类名保留', has(rc.html, 'language-glsl'), rc.html.slice(0, 160));
+var ic = R('行内 `a==b==~c~` 与 `x^2^` 不动\n');
+ok('行内代码: 内容不被改写', has(ic.html, '<code>a==b==~c~</code>') && has(ic.html, '<code>x^2^</code>'), ic.html);
+
+/* ---------- 5. 脚注 ---------- */
+var fnDoc = '正文一[^a]与正文二[^b]。\n\n[^a]: 第一条脚注，带 **加粗**\n[^b]: 第二条脚注\n';
+var rf = R(fnDoc);
+ok('脚注: 引用被替换为 sup.fn-ref', has(rf.html, '<sup class="fn-ref"'), rf.html.slice(0, 200));
+ok('脚注: 脚注区生成', has(rf.html, '<section class="footnotes">'));
+ok('脚注: 定义不再出现在正文', !has(rf.html, '[^a]:'), rf.html);
+ok('脚注: 定义内联 markdown 被解析', has(rf.html, '<strong>加粗</strong>'), rf.html.slice(-400));
+
+/* ---------- 6. 图片路径 ---------- */
+var ri = R('![图](images/001.png)\n\n![远程](https://a.com/b.png)\n\n![](images/sub%20dir/x.jpg)\n\n![中文名](images/截图 01.png)\n');
+ok('图片: 相对路径改写为 appassets', has(ri.html, 'src="https://appassets.local/img/images/001.png"'), ri.html.slice(0, 200));
+ok('图片: 远程图片不动', has(ri.html, 'src="https://a.com/b.png"'));
+ok('图片: 已编码路径不被二次编码', has(ri.html, 'images/sub%20dir/x.jpg'), ri.html);
+ok('图片: 含中文与空格的路径被正确编码', has(ri.html, 'images/%E6%88%AA%E5%9B%BE%2001.png'), ri.html);
+var rd = R('![x](./images/002.jpg)\n');
+ok('图片: ./ 前缀被剥掉', has(rd.html, 'img/images/002.jpg'), rd.html.slice(0, 160));
+ok('图片: 懒加载属性注入', has(ri.html, 'loading="lazy"') && has(ri.html, 'decoding="async"'));
+
+/* ---------- 7. 清洗 ---------- */
+var TAG_S = '<scr' + 'ipt';
+var rsec = R('安全 <scr' + 'ipt>alert(1)</scr' + 'ipt> 测试\n\n<iframe src="x"></iframe>\n\n<img src="images/1.png" onerror="alert(2)" style="color:red">\n\n<div onclick="x()">块</div>\n');
+ok('清洗: script 标签被移除', !has(rsec.html, TAG_S) && !has(rsec.html, 'alert(1)'), rsec.html);
+ok('清洗: iframe 被移除', !has(rsec.html, '<iframe'));
+ok('清洗: onerror 属性被移除', !has(rsec.html, 'onerror'));
+ok('清洗: style 属性被移除', !has(rsec.html, 'style="color:red"'));
+ok('清洗: onclick 属性被移除', !has(rsec.html, 'onclick'));
+ok('清洗: 安全标签 details/summary 保留', has(R('<details><summary>点我</summary>内容</details>').html, '<details>'));
+var rjs = R('[点我](javascript:alert(1))\n');
+ok('清洗: javascript: 链接被剥掉 href', !has(rjs.html, 'javascript:'), rjs.html);
+
+/* ---------- 8. 结构改写 ---------- */
+var rstruct = R('# 一级标题\n\n## 1.我们说，要有光\n\n## 1.我们说，要有光\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n```python\nprint(1)\n```\n\n- [x] 已完成\n- [ ] 未完成\n');
+var dom = mount(rstruct.html);
+ok('结构: 标题有 id', R('# 标题A\n').toc.length === 1 && /id="[^"]+"/.test(R('# 标题A\n').html), R('# 标题A\n').html);
+ok('结构: 重名标题自动去重', rstruct.toc.length === 3 && rstruct.toc[1].id !== rstruct.toc[2].id, JSON.stringify(rstruct.toc.map(function (t) { return t.id; })));
+ok('结构: 目录条目含中文标题', rstruct.toc.some(function (t) { return t.text.indexOf('要有光') >= 0; }), JSON.stringify(rstruct.toc));
+ok('结构: 表格被 .table-wrap 包裹', !!dom.querySelector('.table-wrap > table'));
+ok('结构: 代码块外壳 + 复制按钮', !!dom.querySelector('.code-block > .code-head > .copy[data-copy]'));
+ok('结构: 语言标签显示为 Python', dom.querySelector('.code-block .lang') && dom.querySelector('.code-block .lang').textContent === 'Python', dom.querySelector('.code-block .lang') && dom.querySelector('.code-block .lang').textContent);
+ok('结构: 任务列表复选框存在且被禁用', !!dom.querySelector('input[type=checkbox][disabled]'), rstruct.html.slice(-300));
+var rmermaid = R('```mermaid\ngraph TD; A-->B;\n```\n');
+ok('结构: mermaid 标注为未内置', has(rmermaid.html, 'mermaid-note'));
+
+/* ---------- 9. 其它语法 ---------- */
+ok('语法: 删除线保留为 del', has(R('~~删除~~\n').html, '<del>'), R('~~删除~~\n').html);
+ok('语法: 下标 ~x~ 生效', has(R('H~2~O\n').html, '<sub>2</sub>'), R('H~2~O\n').html);
+ok('语法: 上标 ^x^ 生效', has(R('x^2^\n').html, '<sup>2</sup>'), R('x^2^\n').html);
+ok('语法: 转义美元不当作公式', has(R('价格 \\$5 到 \\$10\n').html, '$5'), R('价格 \\$5 到 \\$10\n').html);
+ok('语法: 表格 GFM 生效', has(R('| a | b |\n|---|---|\n| 1 | 2 |\n').html, '<table>'));
+ok('语法: 自动链接生效', has(R('https://example.com/x\n').html, 'href="https://example.com/x"'), R('https://example.com/x\n').html);
+ok('语法: 列表生效', has(R('- a\n- b\n').html, '<ul>') && has(R('1. a\n2. b\n').html, '<ol>'));
+ok('语法: 块引用生效', has(R('> 引用\n').html, '<blockquote>'));
+ok('语法: 无语言围栏也能渲染', has(R('```\nplain\n```\n').html, '<pre><code>'), R('```\nplain\n```\n').html);
+
+/* ---------- 10. 分段 ---------- */
+var big = [];
+for (var i = 0; i < 400; i++) big.push('## 章节 ' + i + '\n\n' + new Array(120).join('这是一段用于撑体积的中文正文。') + '\n');
+var bigSrc = big.join('\n');
+var chunks = window.LanyuePipeline.splitChunks(bigSrc, 20000);
+ok('分段: 大文档被切成多段', chunks.length > 1, 'chunks=' + chunks.length);
+ok('分段: 拼回原文无损', chunks.join('') === bigSrc, 'len ' + chunks.join('').length + ' vs ' + bigSrc.length);
+ok('分段: 每段围栏配平（不切在代码块内部）', chunks.every(fenceBalanced), 'chunks=' + chunks.length + ' balanced=' + JSON.stringify(chunks.map(fenceBalanced)));
+var fenceDoc = '## 头\n\n```glsl\n' + new Array(400).join('vec3 x = vec3(1.0);\n') + '```\n\n## 尾\n';
+var fchunks = window.LanyuePipeline.splitChunks(fenceDoc, 500);
+ok('分段: 大代码块文档也不在围栏内切', fchunks.every(fenceBalanced), 'chunks=' + fchunks.length);
+
+/* ---------- 11. 真实样本 ---------- */
+var samplePath = '../../blackhole/article1/从零开始搓一个黑洞——glsl编程实战-Baopinsui的文章.md';
+fetch(samplePath).then(function (r) { return r.text(); }).then(function (txt) {
+  var rs = window.LanyuePipeline.render(txt, { imgBase: 'https://appassets.local/img/' });
+  var rsRanges = window.LanyuePipeline.protectedRanges(txt);
+  var off = 0, outsideHeads = 0;
+  txt.split('\n').forEach(function (l) {
+    var at = off; off += l.length + 1;
+    var inP = rsRanges.some(function (r) { return at >= r.s && at < r.e; });
+    if (!inP && /^#{1,6}\s/.test(l)) outsideHeads++;
+  });
+  ok('样本: 文本读取成功', txt.length > 50000, 'len=' + txt.length);
+  ok('样本: 标题数 = 围栏外的 # 行数', rs.toc.length === outsideHeads, 'toc=' + rs.toc.length + ' outsideHeads=' + outsideHeads);
+  ok('样本: 标题数 ≥ 20（GLSL 的 #version/#define 不算标题）', rs.toc.length >= 20, 'toc=' + rs.toc.length);
+  ok('样本: 图片数 = 75', rs.stats.images === 75, 'images=' + rs.stats.images);
+  ok('样本: 识别到 GLSL 代码块 37 个', rs.langs.glsl === 37, JSON.stringify(rs.langs));
+  ok('样本: front matter 标题正确', rs.frontMatter && rs.frontMatter.title.indexOf('黑洞') >= 0, rs.frontMatter && rs.frontMatter.title);
+  ok('样本: 输出无 script 标签', !has(rs.html, TAG_S));
+  ok('样本: 无解析告警', rs.notices.length === 0, JSON.stringify(rs.notices));
+  var flat = rs.html.replace(/\n/g, '');
+  ok('样本: 段落中的 $$ 被拆成独立块', /<p>\$\$u_\{T\}/.test(flat), flat.slice(Math.max(0, flat.indexOf('Planck分布') - 40), flat.indexOf('Planck分布') + 130));
+  ok('样本: 行间公式内容完整', has(rs.html, '\\frac{8 \\pi h c}{\\lambda^{5}}'), '未找到完整公式');
+  ok('样本: 行内公式 ≥ 30 处', (rs.html.match(/\$[^$\n]+\$/g) || []).length >= 30, (rs.html.match(/\$[^$\n]+\$/g) || []).length);
+  ok('样本: 图片全部改写为 appassets', (rs.html.match(/https:\/\/appassets\.local\/img\/images\//g) || []).length === 75, (rs.html.match(/https:\/\/appassets\.local\/img\/images\//g) || []).length);
+  finish();
+}).catch(function (e) {
+  ok('样本: 读取真实文档', false, e.message);
+  finish();
+});
+
+function finish() {
+  document.getElementById('results').innerHTML = lines.map(function (l) {
+    return '<span class="' + (l.indexOf('PASS') === 0 ? 'p' : 'f') + '">' + esc(l) + '</span>';
+  }).join('\n');
+  var sum = document.getElementById('sum');
+  sum.className = 'sum ' + (fail === 0 ? 'pass' : 'fail');
+  sum.textContent = (fail === 0 ? 'ALL PASS' : 'FAILURES PRESENT') + ' — pass=' + pass + ' fail=' + fail;
+  var m = document.createElement('div');
+  m.id = 'verdict';
+  m.style.cssText = 'position:fixed;left:-9999px';
+  m.textContent = 'RESULT pass=' + pass + ' fail=' + fail;
+  document.body.appendChild(m);
+}
+</script>
+</body>
+</html>

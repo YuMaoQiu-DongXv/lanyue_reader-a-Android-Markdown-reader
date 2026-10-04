@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  蓝阅 · 应用清单
+  注意：
+   1) package 属性必须写在这里 —— 命令行构建（aapt2 link）不能用 AGP 的 namespace 机制替代。
+   2) 本应用**不申请任何权限**（没有 INTERNET、没有存储权限）。安装后权限列表为空。
+   3) 不开启 enableOnBackInvokedCallback，从而沿用 onBackPressed 的分发路径（framework-only 没有 AndroidX 的
+      OnBackPressedDispatcher 可用）。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.dsh.mdreader"
+    android:versionCode="1"
+    android:versionName="1.0.0">
+
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="36" />
+
+    <application
+        android:allowBackup="true"
+        android:hardwareAccelerated="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/AppTheme">
+
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode|density"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- ① 标准 markdown MIME：从文件管理器/浏览器点开 .md -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:mimeType="text/markdown" />
+                <data android:mimeType="text/x-markdown" />
+            </intent-filter>
+
+            <!-- ② 按扩展名兜底：很多文件管理器给 .md 报的是 */* 或 octet-stream -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <action android:name="android.intent.action.EDIT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:host="*" />
+                <data android:mimeType="*/*" />
+                <data android:pathPattern=".*\\.md" />
+                <data android:pathPattern=".*\\.markdown" />
+                <data android:pathPattern=".*\\.MD" />
+            </intent-filter>
+
+            <!-- ③ 「分享到蓝阅」：只接 markdown 与纯文本（用户主动发起，不算抢 .txt 的默认打开） -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/markdown" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
+        <!-- 分享导出结果用（只暴露 cacheDir/share/ 下的文件） -->
+        <provider
+            android:name=".ShareProvider"
+            android:authorities="com.dsh.mdreader.share"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+    </application>
+</manifest>

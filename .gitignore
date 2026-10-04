@@ -1,0 +1,13 @@
+# 构建与产物
+/build/
+/dist/
+_work/
+
+# 签名密钥与口令：绝不入库（丢失后无法覆盖升级，务必自行备份）
+/keystore/
+keystore.local.txt
+
+# 编辑器
+*.swp
+.idea/
+.vscode/

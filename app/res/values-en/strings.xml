@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Lanyue</string>
+    <string name="editor_title">Edit</string>
+    <string name="editor_save">Save</string>
+    <string name="editor_saved">Saved</string>
+    <string name="editor_unsaved_title">Unsaved changes</string>
+    <string name="editor_unsaved_msg">Save your changes?</string>
+    <string name="editor_save_and_exit">Save and exit</string>
+    <string name="editor_discard">Discard</string>
+    <string name="editor_cancel">Cancel</string>
+    <string name="editor_readonly_note">Opened read-only; saving creates a new file</string>
+    <string name="fmt_bold">Bold</string>
+    <string name="fmt_italic">Italic</string>
+    <string name="fmt_h2">Heading</string>
+    <string name="fmt_list">List</string>
+    <string name="fmt_quote">Quote</string>
+    <string name="fmt_code">Code</string>
+    <string name="fmt_link">Link</string>
+    <string name="fmt_image">Image</string>
+    <string name="fmt_table">Table</string>
+    <string name="loading">Loading…</string>
+    <string name="open_failed">Failed to open</string>
+</resources>

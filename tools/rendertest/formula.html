@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>蓝阅 · 公式与字体自查</title>
+<link rel="stylesheet" href="vendor/katex/katex.min.css">
+<link rel="stylesheet" href="app.css">
+<style>
+  .probe { position: fixed; left: -9999px; }
+  #fontstat { position: fixed; top: 0; left: 0; right: 0; z-index: 99;
+    background: #101827; color: #6ee7a8; font: 12px ui-monospace, monospace; padding: 6px 10px; }
+  body { padding-top: 46px !important; }
+</style>
+</head>
+<body>
+<div id="fontstat">checking fonts…</div>
+<article id="doc" class="md"></article>
+
+<script src="vendor/marked/marked.umd.js"></script>
+<script src="vendor/katex/katex.min.js"></script>
+<script src="vendor/katex/contrib/mhchem.min.js"></script>
+<script src="vendor/katex/contrib/auto-render.min.js"></script>
+<script src="pipeline.js"></script>
+<script>
+var params = new URLSearchParams(location.search);
+if (params.get('theme')) document.documentElement.setAttribute('data-theme', params.get('theme'));
+
+var SRC = [
+  '# 公式渲染与字体自查',
+  '',
+  '行内公式：质能方程 $E = mc^2$，下标上标 $a_i^2$，希腊字母 $\\alpha\\beta\\gamma\\theta\\lambda\\pi$。',
+  '',
+  '样本里那处嵌在段落中间的公式（原文形态）：而黑体谱，就是无数单色光的合成。Planck分布$$u_{T}(\\lambda)=\\frac{8 \\pi h c}{\\lambda^{5}} \\frac{1}{e^{\\frac{h c}{\\lambda k T}}-1}$$只需对 Planck 分布积分即可。',
+  '',
+  '强调语法干扰项（数学里含 `*` 与 `_`）：$Projection*Rotation*Translation$ 与 $a_{b_c}$。',
+  '',
+  '非法公式的降级（应显示为红色原文，不崩）：$a_b_c$。',
+  '',
+  '矩阵与括号：',
+  '',
+  '$$\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix} \\qquad \\left[ \\frac{\\partial f}{\\partial x} \\right]$$',
+  '',
+  '求和与积分：$\\sum_{n=1}^{\\infty} \\frac{1}{n^2} = \\frac{\\pi^2}{6}$，$\\int_{0}^{\\infty} e^{-x^2}\\,dx = \\frac{\\sqrt{\\pi}}{2}$。',
+  '',
+  '根号与分式：$\\sqrt[3]{x^2+y^2}$，$\\dfrac{1}{1+\\dfrac{1}{x}}$。',
+  '',
+  '化学式（mhchem）：$\\ce{2H2 + O2 -> 2H2O}$，$\\ce{SO4^2-}$，',
+  '',
+  '$$\\ce{CO2 + C -> 2CO}$$',
+  '',
+  '字体族：$\\mathcal{L}$ $\\mathscr{L}$ $\\mathfrak{g}$ $\\mathbb{R}$ $\\mathsf{ABC}$ $\\mathtt{abc}$ $\\mathbf{XYZ}$',
+  '',
+  '大型算子：$\\bigcup_{i} A_i$ $\\bigoplus$ $\\oint_C$ $\\lim_{x \\to 0} \\frac{\\sin x}{x}$',
+  '',
+  '四分隔符：行内 $x^2$ 与 \\(y^2\\)，行间 $$z^2$$ 与 \\[w^2\\]。'
+].join('\n');
+
+var res = window.LanyuePipeline.render(SRC, { imgBase: './' });
+document.getElementById('doc').innerHTML = res.html;
+
+window.renderMathInElement(document.getElementById('doc'), {
+  delimiters: [
+    { left: '$$', right: '$$', display: true },
+    { left: '\\[', right: '\\]', display: true },
+    { left: '\\(', right: '\\)', display: false },
+    { left: '$', right: '$', display: false }
+  ],
+  ignoredTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code', 'option'],
+  throwOnError: false, strict: false, trust: false, errorColor: '#d64545'
+});
+
+var families = ['KaTeX_Main', 'KaTeX_Math', 'KaTeX_Size1', 'KaTeX_Size2', 'KaTeX_Size3', 'KaTeX_Size4',
+  'KaTeX_AMS', 'KaTeX_Caligraphic', 'KaTeX_Fraktur', 'KaTeX_SansSerif', 'KaTeX_Script', 'KaTeX_Typewriter'];
+var katexCount = document.querySelectorAll('.katex').length;
+
+// 把渲染错误的原文与信息抓出来
+var errs = Array.prototype.map.call(document.querySelectorAll('.katex-error'), function (el) {
+  return (el.getAttribute('title') || '') + ' <<< ' + el.textContent.slice(0, 80);
+});
+
+// 字体是异步加载的，必须等 fonts.ready 之后再判定，否则永远是 false（假阴性）。
+// 另外主动 load 每一档，以证明 20 个 woff2 文件在设备上全都可达（APK assets 里最容易 404 的就是它们）。
+function report() {
+  var jobs = families.map(function (f) {
+    return document.fonts.load('16px "' + f + '"').catch(function () { return null; });
+  });
+  Promise.all(jobs).then(function () {
+    var missing = families.filter(function (f) { return !document.fonts.check('16px "' + f + '"'); });
+    var stat = document.getElementById('fontstat');
+    stat.textContent = 'KaTeX 公式 ' + katexCount + ' 处 · 渲染错误 ' + errs.length + ' 处 · 字体 ' +
+      (families.length - missing.length) + '/' + families.length + ' 已加载' +
+      (missing.length ? ' · 缺失: ' + missing.join(', ') : '');
+    var old = document.getElementById('verdict');
+    if (old) old.remove();
+    var verdict = document.createElement('div');
+    verdict.id = 'verdict';
+    verdict.style.cssText = 'position:fixed;left:-9999px';
+    verdict.textContent = 'FONTS loaded=' + (families.length - missing.length) + '/' + families.length +
+      ' missing=[' + missing.join(',') + '] katex=' + katexCount +
+      ' errors=' + errs.length + (errs.length ? ' detail=' + errs.join(' | ') : '');
+    document.body.appendChild(verdict);
+  });
+}
+if (document.fonts && document.fonts.ready) {
+  document.fonts.ready.then(report).catch(report);
+  setTimeout(report, 2000);
+} else {
+  report();
+}
+</script>
+</body>
+</html>

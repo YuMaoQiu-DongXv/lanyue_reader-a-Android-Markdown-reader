@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">蓝阅</string>
+    <string name="editor_title">编辑</string>
+    <string name="editor_save">保存</string>
+    <string name="editor_saved">已保存</string>
+    <string name="editor_unsaved_title">内容已修改</string>
+    <string name="editor_unsaved_msg">要保存改动吗？</string>
+    <string name="editor_save_and_exit">保存并退出</string>
+    <string name="editor_discard">放弃改动</string>
+    <string name="editor_cancel">取消</string>
+    <string name="editor_readonly_note">本文档以只读方式打开，保存将另存为新文件</string>
+    <string name="fmt_bold">加粗</string>
+    <string name="fmt_italic">斜体</string>
+    <string name="fmt_h2">标题</string>
+    <string name="fmt_list">列表</string>
+    <string name="fmt_quote">引用</string>
+    <string name="fmt_code">代码</string>
+    <string name="fmt_link">链接</string>
+    <string name="fmt_image">图片</string>
+    <string name="fmt_table">表格</string>
+    <string name="loading">正在载入…</string>
+    <string name="open_failed">打开失败</string>
+</resources>
