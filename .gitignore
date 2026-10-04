@@ -1,0 +1,16 @@
+# 构建与产物
+/build/
+/dist/
+_work/
+
+# 签名密钥与口令：绝不入库（丢失后无法覆盖升级，务必自行备份）
+/keystore/
+keystore.local.txt
+
+# 编辑器
+*.swp
+.idea/
+.vscode/
+
+# 真机反馈截图：只在本地留存，不进仓库（约 3.6MB）
+/bugs/

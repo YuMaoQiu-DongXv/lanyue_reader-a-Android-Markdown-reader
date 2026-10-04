@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>蓝阅</title>
+<link rel="stylesheet" href="vendor/katex/katex.min.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<!-- ============ 顶栏 ============ -->
+<div class="topbar" id="topbar">
+  <button class="iconbtn" id="btn-toc" aria-label="目录">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
+      <path d="M4 6h16M4 12h16M4 18h10"/>
+    </svg>
+  </button>
+  <button class="iconbtn" id="btn-home" aria-label="返回" hidden>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M15 5l-7 7 7 7"/>
+    </svg>
+  </button>
+  <div class="title" id="doc-title">蓝阅</div>
+  <div class="spacer"></div>
+  <span class="pct" id="pct"></span>
+  <button class="iconbtn" id="btn-search" aria-label="搜索">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
+      <circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21"/>
+    </svg>
+  </button>
+  <button class="iconbtn" id="btn-edit" aria-label="编辑">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M4 20h4L19 9a2.5 2.5 0 10-3.5-3.5L4 16.5V20z"/>
+    </svg>
+  </button>
+  <button class="iconbtn" id="btn-more" aria-label="更多">
+    <svg viewBox="0 0 24 24" fill="currentColor">
+      <circle cx="12" cy="5" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="12" cy="19" r="1.9"/>
+    </svg>
+  </button>
+</div>
+<div class="progress" id="progress"></div>
+
+<!-- ============ 正文 / 首页 ============ -->
+<div id="home" class="home" hidden></div>
+<article id="doc" class="md" hidden></article>
+
+<!-- ============ 遮罩 ============ -->
+<div class="scrim" id="scrim"></div>
+
+<!-- ============ 目录抽屉 ============ -->
+<aside class="toc" id="toc">
+  <div class="panel-head">
+    <div class="h">目录</div>
+    <span class="count" id="toc-count"></span>
+  </div>
+  <div class="toc-list" id="toc-list"></div>
+</aside>
+
+<!-- ============ 搜索面板 ============ -->
+<div class="search" id="search">
+  <div class="search-row">
+    <input id="search-input" type="search" placeholder="在文档中搜索…" autocomplete="off" enterkeyhint="search">
+    <span class="stat" id="search-stat"></span>
+    <button class="iconbtn" id="search-prev" aria-label="上一个">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M7 14l5-5 5 5"/></svg>
+    </button>
+    <button class="iconbtn" id="search-next" aria-label="下一个">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10l5 5 5-5"/></svg>
+    </button>
+    <button class="iconbtn" id="search-close" aria-label="关闭">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+</div>
+
+<!-- ============ 设置 / 更多 ============ -->
+<section class="sheet" id="sheet">
+  <div class="grab"></div>
+  <div class="grp" id="sheet-body"></div>
+</section>
+
+<!-- ============ 图片放大 ============ -->
+<div class="lightbox" id="lightbox">
+  <button class="close" id="lightbox-close" aria-label="关闭">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+  </button>
+  <img id="lightbox-img" alt="">
+  <div class="hint">双指缩放 · 双击放大 · 单指拖动 · 点空白处关闭</div>
+</div>
+
+<div class="toast" id="toast"></div>
+<div id="hidden-probe" hidden></div>
+
+<!-- ============ 依赖（顺序敏感） ============ -->
+<script src="vendor/marked/marked.umd.js"></script>
+<script src="vendor/prism/prism-core.min.js"></script>
+<script src="vendor/prism/prism-markup.min.js"></script>
+<script src="vendor/prism/prism-css.min.js"></script>
+<script src="vendor/prism/prism-clike.min.js"></script>
+<script src="vendor/prism/prism-javascript.min.js"></script>
+<script src="vendor/prism/prism-typescript.min.js"></script>
+<script src="vendor/prism/prism-python.min.js"></script>
+<script src="vendor/prism/prism-java.min.js"></script>
+<script src="vendor/prism/prism-c.min.js"></script>
+<script src="vendor/prism/prism-cpp.min.js"></script>
+<script src="vendor/prism/prism-csharp.min.js"></script>
+<script src="vendor/prism/prism-json.min.js"></script>
+<script src="vendor/prism/prism-bash.min.js"></script>
+<script src="vendor/prism/prism-markdown.min.js"></script>
+<script src="vendor/prism/prism-sql.min.js"></script>
+<script src="vendor/prism/prism-yaml.min.js"></script>
+<script src="vendor/prism/prism-glsl.min.js"></script>
+<script src="vendor/prism/prism-rust.min.js"></script>
+<script src="vendor/prism/prism-go.min.js"></script>
+<script src="vendor/katex/katex.min.js"></script>
+<script src="vendor/katex/contrib/mhchem.min.js"></script>
+<script src="vendor/katex/contrib/auto-render.min.js"></script>
+<script src="pipeline.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

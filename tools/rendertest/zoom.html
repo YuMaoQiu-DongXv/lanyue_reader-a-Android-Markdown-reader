@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>蓝阅 · 图片查看器手势自查</title>
+<style>
+  body { font: 12px/1.6 ui-monospace, Consolas, monospace; margin: 0; padding: 12px; background: #0b1220; color: #cfe0f7; }
+  h1 { font-size: 14px; color: #7fb2ff; margin: 0 0 8px; }
+  .sum { padding: 8px 10px; border-radius: 6px; margin-bottom: 10px; font-weight: 700; }
+  .sum.pass { background: #10361f; color: #6ee7a8; }
+  .sum.fail { background: #3a1212; color: #ff9a9a; }
+  #results { white-space: pre-wrap; }
+  .p { color: #6ee7a8; } .f { color: #ff9a9a; font-weight: 700; }
+  #verdict { position: fixed; left: -9999px; }
+  iframe { width: 400px; height: 700px; border: 1px solid #24406b; }
+</style>
+</head>
+<body>
+<h1>图片查看器手势自查（合成 PointerEvent 驱动真实页面）</h1>
+<div class="sum" id="sum">running…</div>
+<pre id="results"></pre>
+<iframe id="f" src="index.html?doc=testdoc/acceptance.md&imgbase=./testdoc/"></iframe>
+<div id="verdict">running</div>
+
+<script>
+var lines = [], pass = 0, fail = 0;
+function ok(name, cond, extra) {
+  if (cond) { pass++; lines.push('PASS  ' + name); }
+  else { fail++; lines.push('FAIL  ' + name + (extra !== undefined ? '   >> ' + extra : '')); }
+}
+function approx(a, b, tol) { return Math.abs(a - b) <= (tol === undefined ? 0.02 : tol); }
+
+var f = document.getElementById('f');
+var IMG = 'testdoc/test-images/img%2002%20with%20space.png';
+var IMG_BIG = 'testdoc/test-images/img-04-big.png';   // 1640x600，是 IMG 的两倍
+
+f.onload = function () { setTimeout(run, 1200); };
+
+function run() {
+  var win = f.contentWindow, doc = win.document;
+  var Z = win.LanyueZoom;
+  var lb = doc.getElementById('lightbox');
+  var img = doc.getElementById('lightbox-img');
+
+  if (!Z) { ok('查看器已挂载 (window.LanyueZoom)', false); return finish(); }
+  ok('查看器已挂载 (window.LanyueZoom)', true);
+
+  // ---------- 打开与"适应屏幕"----------
+  Z.open(IMG);
+  ok('open() 后处于打开态', Z.isOpen() === true);
+  ok('lightbox 加上了 show 类', lb.classList.contains('show'));
+
+  var waited = 0;
+  (function waitReady() {
+    if (!Z.isReady() && waited < 3000) { waited += 100; return setTimeout(waitReady, 100); }
+    if (!Z.isReady()) { ok('图片加载完成', false, '3 秒内未 ready'); return finish(); }
+    ok('图片加载完成', true);
+    afterReady();
+  })();
+
+  function afterReady() {
+    var st = Z.getState();
+    var expectFit = Math.min(st.vw / st.natW, st.vh / st.natH, 1);
+    ok('初始缩放 = 适应屏幕', approx(st.scale, expectFit, 0.01), 'scale=' + st.scale + ' expect=' + expectFit);
+    ok('初始不放大超过原图 (=1 上限)', st.scale <= 1.0001, 'scale=' + st.scale);
+    ok('初始水平居中', approx(st.tx, (st.vw - st.natW * st.scale) / 2, 1.5), 'tx=' + st.tx);
+    ok('初始垂直居中', approx(st.ty, (st.vh - st.natH * st.scale) / 2, 1.5), 'ty=' + st.ty);
+    ok('并非撑满全屏（图比屏幕小时留白）', st.natW * st.scale <= st.vw + 1 && st.natH * st.scale <= st.vh + 1,
+       Math.round(st.natW * st.scale) + 'x' + Math.round(st.natH * st.scale) + ' vs ' + st.vw + 'x' + st.vh);
+
+    // ---------- 锚点缩放 ----------
+    var cx = 150, cy = 260;
+    var before = Z.getState();
+    // 记录锚点对应的图片坐标
+    var ix = (cx - before.tx) / before.scale, iy = (cy - before.ty) / before.scale;
+    Z.zoomAt(cx, cy, 2);
+    var after = Z.getState();
+    ok('zoomAt(×2) 缩放确实变大', after.scale > before.scale * 1.9, before.scale + ' → ' + after.scale);
+    var ix2 = (cx - after.tx) / after.scale, iy2 = (cy - after.ty) / after.scale;
+    ok('缩放锚定在手势点（该点下的图像位置不变）', approx(ix, ix2, 1.5) && approx(iy, iy2, 1.5),
+       'img点 ' + ix.toFixed(1) + ',' + iy.toFixed(1) + ' → ' + ix2.toFixed(1) + ',' + iy2.toFixed(1));
+
+    // ---------- 上限钳制 ----------
+    Z.zoomAt(200, 350, 1000);
+    var maxed = Z.getState();
+    ok('缩放到上限被钳制', approx(maxed.scale, maxed.maxScale, 0.001), 'scale=' + maxed.scale + ' max=' + maxed.maxScale);
+
+    // ---------- 下限钳制 ----------
+    Z.zoomAt(200, 350, 0.001);
+    var mined = Z.getState();
+    ok('缩小到下限被钳制（不会小于适应屏幕）', approx(mined.scale, mined.minScale, 0.001), 'scale=' + mined.scale + ' min=' + mined.minScale);
+
+    // ---------- 单指拖动 + 边界钳制 ----------
+    Z.zoomAt(200, 350, 100);      // 先放大到上限，才有可拖空间
+    var st1 = Z.getState();
+    Z.panBy(100000, 100000);
+    var st2 = Z.getState();
+    ok('拖到右下后被钳制（不出现空白）', st2.tx <= 0.001 && st2.ty <= 0.001, 'tx=' + st2.tx + ' ty=' + st2.ty);
+    Z.panBy(-100000, -100000);
+    var st3 = Z.getState();
+    ok('拖到左上后被钳制（不出现空白）',
+       st3.tx >= st3.vw - st3.natW * st3.scale - 0.001 && st3.ty >= st3.vh - st3.natH * st3.scale - 0.001,
+       'tx=' + st3.tx + ' 下限=' + (st3.vw - st3.natW * st3.scale));
+
+    // ---------- 合成"双指捏合" ----------
+    Z.reset();
+    var sBefore = Z.getState().scale;
+    fire(lb, 'pointerdown', 11, 150, 300);
+    fire(lb, 'pointerdown', 12, 250, 320);
+    fire(lb, 'pointermove', 11, 100, 300);
+    fire(lb, 'pointermove', 12, 300, 320);
+    var sPinch = Z.getState().scale;
+    ok('双指张开 → 放大', sPinch > sBefore * 1.2, sBefore.toFixed(3) + ' → ' + sPinch.toFixed(3));
+    fire(lb, 'pointermove', 11, 190, 310);
+    fire(lb, 'pointermove', 12, 210, 310);
+    var sPinchIn = Z.getState().scale;
+    ok('双指捏合 → 缩小', sPinchIn < sPinch, sPinch.toFixed(3) + ' → ' + sPinchIn.toFixed(3));
+    fire(lb, 'pointerup', 11, 190, 310);
+    fire(lb, 'pointerup', 12, 210, 310);
+
+    // ---------- 双击放大 / 再双击还原 ----------
+    Z.reset();
+    var fit = Z.getState().scale;
+    fire(lb, 'pointerdown', 21, 200, 350); fire(lb, 'pointerup', 21, 200, 350);
+    fire(lb, 'pointerdown', 21, 200, 350); fire(lb, 'pointerup', 21, 200, 350);
+    var dbl = Z.getState().scale;
+    ok('双击放大', dbl > fit * 1.5, fit.toFixed(3) + ' → ' + dbl.toFixed(3));
+    fire(lb, 'pointerdown', 22, 200, 350); fire(lb, 'pointerup', 22, 200, 350);
+    fire(lb, 'pointerdown', 22, 200, 350); fire(lb, 'pointerup', 22, 200, 350);
+    var back = Z.getState().scale;
+    ok('再次双击还原到适应屏幕', approx(back, fit, 0.02), dbl.toFixed(3) + ' → ' + back.toFixed(3));
+
+    // ---------- transform 必须是 translate3d（独立合成层）----------
+    ok('transform 使用 translate3d（提升为合成层）',
+       /translate3d\(/.test(img.style.transform), img.style.transform);
+
+    // ---------- 缩放上限受"GPU 纹理预算"约束 ----------
+    var capped = Z.getState();
+    ok('缩放上限不超过纹理预算（<=3）', capped.maxScale <= 3.0001, 'maxScale=' + capped.maxScale);
+
+    // ---------- 两级加载：换更清晰的版本后，屏幕上的大小与中心不变 ----------
+    Z.close();
+    Z.open(IMG, IMG_BIG);
+    var w0 = 0;
+    (function waitSmall(n) {
+      if (!Z.isReady() && n < 30) return setTimeout(function () { waitSmall(n + 1); }, 100);
+      var a = Z.getState();
+      w0 = a.natW * a.scale;                       // 屏幕上实际宽度
+      var center0 = (a.vw / 2 - a.tx) / a.scale;   // 视图中心对应的图像坐标
+      Z.zoomAt(200, 300, 1.8);                     // 先放大一点，验证换图时也保持
+      var b = Z.getState();
+      var w1 = b.natW * b.scale;
+      var center1 = (b.vw / 2 - b.tx) / b.scale;
+      (function waitBig(n2) {
+        if (Z.getState().natW <= a.natW && n2 < 40) return setTimeout(function () { waitBig(n2 + 1); }, 100);
+        var t0 = Z.getState();
+        setTimeout(function () {
+        var c = Z.getState();
+        lines.push('      [timeline] 换图瞬间: natW=' + t0.natW + ' s=' + t0.scale.toFixed(4) + ' tx=' + t0.tx.toFixed(1) +
+                   ' | 400ms 后: natW=' + c.natW + ' s=' + c.scale.toFixed(4) + ' tx=' + c.tx.toFixed(1) +
+                   ' fit=' + c.fitScale.toFixed(4) + ' min=' + c.minScale.toFixed(4) + ' max=' + c.maxScale.toFixed(4));
+        ok('二级加载换成了更大的图', c.natW > a.natW, a.natW + ' → ' + c.natW);
+        ok('换图后屏幕显示尺寸不变', approx(c.natW * c.scale, w1, w1 * 0.02),
+           w1.toFixed(1) + ' → ' + (c.natW * c.scale).toFixed(1));
+        // 判据说明：图片比视口宽时，左边缘被钳制在 0（不许露白）——
+        // 此时"视图中心对应的图像点"必然随缩放变化，强行保持会让边缘露白。
+        // 所以合理的判据是"刚才在中心的那块内容没有跳走"：位移不超过视口的 25%。
+        var xBefore = b.tx + center1 * b.scale;      // 该图像点当时的屏幕横坐标（应约等于视口中心）
+        var xAfter = c.tx + center1 * c.scale;       // 换图后它跑到哪
+        ok('换图后画面不跳变（原中心内容位移 <= 视口 25%）',
+           Math.abs(xAfter - xBefore) <= c.vw * 0.25,
+           xBefore.toFixed(1) + ' → ' + xAfter.toFixed(1) + ' (vw=' + c.vw + ', 位移=' +
+           Math.abs(xAfter - xBefore).toFixed(1) + ')');
+        ok('img.src 已切到清晰版', (img.getAttribute('src') || '').indexOf('img-04-big') >= 0, img.getAttribute('src'));
+        continueRest();
+        }, 400);
+      })(0);
+    })(0);
+
+    function continueRest() {
+    // ---------- 点图片不关闭 ----------
+    fire(img, 'pointerdown', 31, 200, 350); fire(img, 'pointerup', 31, 200, 350);
+    ok('单击图片本身不关闭（避免拖动误触）', Z.isOpen() === true);
+
+    // ---------- 点空白处关闭 ----------
+    fire(lb, 'pointerdown', 41, 8, 8); fire(lb, 'pointerup', 41, 8, 8);
+    setTimeout(function () {
+      ok('点空白处关闭', Z.isOpen() === false, 'still open');
+      ok('关闭后释放了图片引用', !img.getAttribute('src'));
+      finish();
+    }, 420);
+    }
+  }
+}
+
+function fire(el, type, id, x, y) {
+  var win = el.ownerDocument.defaultView;
+  var ev = new win.PointerEvent(type, {
+    pointerId: id, clientX: x, clientY: y, bubbles: true, cancelable: true,
+    pointerType: 'touch', isPrimary: id < 20, buttons: type === 'pointerup' ? 0 : 1
+  });
+  el.dispatchEvent(ev);
+}
+
+function finish() {
+  document.getElementById('results').innerHTML = lines.map(function (l) {
+    return '<span class="' + (l.indexOf('PASS') === 0 ? 'p' : 'f') + '">' +
+      l.replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</span>';
+  }).join('\n');
+  var sum = document.getElementById('sum');
+  sum.className = 'sum ' + (fail === 0 ? 'pass' : 'fail');
+  sum.textContent = (fail === 0 ? 'ALL PASS' : 'FAILURES PRESENT') + ' — pass=' + pass + ' fail=' + fail;
+  document.getElementById('verdict').textContent = 'ZOOM pass=' + pass + ' fail=' + fail;
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 蓝白文档图标：白纸 + 折角 + 三行文字（矢量，几百字节） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M36,26 h28 l14,14 v40 a6,6 0 0 1 -6,6 h-36 a6,6 0 0 1 -6,-6 v-48 a6,6 0 0 1 6,-6 z" />
+    <path android:fillColor="#BCD8FB"
+        android:pathData="M64,26 l14,14 h-14 z" />
+    <path android:fillColor="#1670E8"
+        android:pathData="M42,50 h24 v4 h-24 z" />
+    <path android:fillColor="#1670E8"
+        android:pathData="M42,60 h24 v4 h-24 z" />
+    <path android:fillColor="#8FBEFF"
+        android:pathData="M42,70 h14 v4 h-14 z" />
+</vector>
