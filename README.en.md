@@ -72,7 +72,7 @@ bash build.sh check    # audit an existing artifact (size / permissions / entrie
 bash build.sh clean
 ```
 
-Output: `dist/lanyue-1.0.0-release.apk`
+Output: `dist/lanyue-1.0.1-release.apk`
 
 | Component | Requirement | Default probe path |
 |---|---|---|

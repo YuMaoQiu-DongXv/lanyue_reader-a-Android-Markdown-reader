@@ -34,8 +34,8 @@ JDK_HOME="${JDK_HOME:-/c/Program Files/Microsoft/jdk-17.0.10.7-hotspot}"
 APP_PACKAGE="com.dsh.mdreader"
 MIN_SDK=26
 TARGET_SDK=36
-VERSION_CODE=1
-VERSION_NAME="1.0.0"
+VERSION_CODE=2
+VERSION_NAME="1.0.1"
 OUT_APK_NAME="lanyue-${VERSION_NAME}-release"
 
 APP_DIR="$PROJECT_ROOT/app"

@@ -60,7 +60,7 @@ bash build.sh check    # 只审计已有产物（体积/权限/条目/签名/对
 bash build.sh clean    # 清理
 ```
 
-产物：`dist/lanyue-1.0.0-release.apk`
+产物：`dist/lanyue-1.0.1-release.apk`
 
 | 组件 | 要求 | 默认探测路径 |
 |---|---|---|

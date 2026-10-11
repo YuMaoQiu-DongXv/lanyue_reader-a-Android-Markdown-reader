@@ -149,7 +149,7 @@ KaTeX 字体独占 56% 是唯一硬成本；其余全部加起来 200 KB 不到�
 
 ## 8. 交付物
 
-- `dist/lanyue-1.0.0-release.apk`（已签名）
+- `dist/lanyue-1.0.1-release.apk`（已签名）
 - 源码 + `SPEC.md` + `build.sh`（免 Gradle 一键构建）
 - `真机自查清单.md`
 - 自签密钥 + `keystore.local.txt`（**用户需自行备份；丢失则无法覆盖升级**）

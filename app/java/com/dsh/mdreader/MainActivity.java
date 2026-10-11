@@ -875,7 +875,7 @@ public final class MainActivity extends Activity implements AssetServer.DocSourc
         try {
             return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
         } catch (Exception e) {
-            return "1.0.0";
+            return "1.0.1";
         }
     }
 

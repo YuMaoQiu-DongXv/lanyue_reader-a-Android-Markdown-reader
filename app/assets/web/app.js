@@ -542,7 +542,7 @@
     html += '<div class="gl">高级</div>';
     html += row('switch', '所有文件访问', '开启后可直接读写任意目录的 .md（需在系统设置中授权）', 'set-allfiles', !!s.allFilesAccess);
     html += row('info', 'WebView 内核', shortUa(state.webview || ''));
-    html += row('info', '版本', '蓝阅 ' + (state.appVersion || '1.0.0'));
+    html += row('info', '版本', '蓝阅 ' + (state.appVersion || '1.0.1'));
     html += row('action', '关闭', '', 'act-close');
     body.innerHTML = html;
 
