@@ -6,6 +6,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
+import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
@@ -15,8 +16,6 @@ import android.print.PrintDocumentAdapter;
 import android.print.PrintManager;
 import android.provider.MediaStore;
 import android.util.Log;
-import android.view.MotionEvent;
-import android.view.View;
 import android.webkit.WebView;
 
 import org.json.JSONObject;
@@ -28,37 +27,59 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 导出：PDF（系统打印链路）、分片长图、当前屏、选区。
+ * 导出：PDF（系统打印链路）与长图。
  *
- * 长图的现实约束（用样本量出来的）：那篇文档渲染出来约 6~8 万像素高，
- * 一张 1080×70000 的位图 = 290 MB，任何手机都分配不出来。
- * 所以必须「逐屏抓取 + 拼接 + 分片输出」，并且每片高度按可用堆内存动态收敛。
+ * <h3>长图：为什么不是"硬件合成帧"路线</h3>
+ * 最早的实现是"滚动一屏 → {@code web.draw()} 抓一屏 → 拼接"。它有两个死结：
+ * <ol>
+ *   <li><b>抓不准</b>：{@code draw()} 对硬件加速的 WebView 拿到的是**已经合成好的那一帧**，
+ *       而滚动是异步的（Chromium 在合成线程上干活）。滚动之后能不能抓到新画面全看时序，
+ *       表现就是"只有开头一段有内容、之后全白"。</li>
+ *   <li><b>观感差</b>：天然是 O(N) 次滚动 + 等待，慢，而且屏幕上能看见页面在滚。</li>
+ * </ol>
  *
- * 另一个必须处理的点：页面顶栏是 position:fixed，逐屏抓取会让它出现在每一片里。
- * 因此导出前 JS 会给 <html> 加 .exporting 类把顶栏隐藏，导出结束后（exportFinished）恢复。
+ * <h3>现在的机制：软件渲染层 + 全屏遮挡 + 同步绘制</h3>
+ * <ol>
+ *   <li>先把 WebView 切成 {@link android.view.View#LAYER_TYPE_SOFTWARE}：
+ *       软件路径下 {@code draw()} 是**同步确定性**的 —— 它拿的就是"当前滚动位置上该有的内容"，
+ *       不再和合成器赛跑（这是本方案与旧实现唯一的、也是最关键的区别）；</li>
+ *   <li>同时盖一层不透明的原生覆盖层：用户看到的是"正在导出 N/M"，而不是页面在滚；</li>
+ *   <li>逐屏：滚动 → 等两帧（软件路径下光栅化发生在 draw 时，等两帧只是让滚动状态落定）
+ *       → 同步 draw 抓一屏 → 贴进分片位图；</li>
+ *   <li>抓到的整屏若同色（说明这一屏确实还没画出来）就重试至多两次；</li>
+ *   <li>分片高度按可用堆内存收敛，写相册。</li>
+ * </ol>
+ *
+ * <p>另外记录一条已研究过、但 API 层面走不通的路线，免得以后有人再撞：
+ * 让 WebView 的 PrintDocumentAdapter 把整篇排版成"一页超长 PDF"，再用 PdfRenderer 分带栅格化。
+ * 这条路在 API 层面做不了 —— LayoutResultCallback / WriteResultCallback 的构造函数是**包内可见**的
+ * （框架刻意不允许应用手动驱动打印流程），网上那些"WebView 直接存 PDF"的做法都靠反射非公开成员，
+ * 而反射非公开框架成员属于隐藏 API，行为不受保证。结论：不弹系统打印界面就拿不到那个 PDF。
  */
 public final class Exporter {
 
     private static final String TAG = "LanyueExport";
-    private static final int REQ_CHUNK_PX = 12000;      // 用户批准的每片上限（输出像素）
-    private static final int ACK_EXTRA_MS = 40;         // 收到滚动回执后再等一小会儿，让画面落地
-    private static final int ACK_TIMEOUT_MS = 700;      // 回执兜底时限（页面没回也要继续，别卡死）
-    private static final float BLANK_RATIO = 0.9985f;   // 「整屏同色」判定阈值（识别未合成的空白帧）
-    private static final int BLANK_RETRY = 2;           // 疑似空白帧的重试次数
+
+    /** 每片的输出像素上限（用户批准的值） */
+    private static final int REQ_CHUNK_PX = 12000;
+    /** 滚动后等待的毫秒数（软件路径下 draw 时才光栅化，这里只是让滚动状态落定） */
+    private static final int SETTLE_MS = 60;
+    /** 「整屏同色」判定阈值 */
+    private static final float BLANK_RATIO = 0.9985f;
+    /** 疑似空白帧的重试次数 */
+    private static final int BLANK_RETRY = 2;
+    /** 切软件层后等它生效的时间 */
+    private static final int LAYER_SWITCH_MS = 150;
+    /** 整个导出流程的看门狗 */
+    private static final long WATCHDOG_MS = 180_000;
 
     public interface Callback {
         /** shareUri 非空表示可直接分享（cacheDir/share 下的文件） */
         void done(boolean ok, String msg, String shareUri);
     }
 
-    /**
-     * 由 MainActivity 提供 WebView 的几何信息。
-     *
-     * **单位必须显式写清**：CSS 像素（网页里的 px）与物理像素（View 的 px）相差一个 density，
-     * 早期版本把物理像素传给了"按 CSS 像素换算"的 scrollTo()，于是每步滚动被多乘了一次 density，
-     * 结果就是"长图只有第一格有内容，后面全白"。方法名里带 Css / Phys 就是为了不再犯。
-     */
-    public interface Layout {
+    /** 由 MainActivity 提供宿主能力（几何、滚动、覆盖层、渲染层切换） */
+    public interface Host {
         /** 正文总高度（CSS px） */
         int contentHeightCss();
 
@@ -68,32 +89,42 @@ public final class Exporter {
         /** 当前滚动位置（CSS px） */
         int scrollYCss();
 
-        /** 滚动到指定位置（**物理像素**） */
+        /** 滚动到指定位置（**物理像素**；入参单位写在名字里，别再乘 density） */
         void scrollToPhys(int physY);
+
+        /** 显示不透明导出覆盖层（遮住滚动过程） */
+        void showExportOverlay(String title);
+
+        /** 更新覆盖层进度 */
+        void updateExportOverlay(int done, int total);
+
+        /** 移除覆盖层 */
+        void hideExportOverlay();
+
+        /** 切换软件渲染层（导出期间开启，结束后必须恢复） */
+        void setSoftwareLayer(boolean on);
     }
 
     private final Activity activity;
     private final WebView web;
     private final Settings settings;
-    private final Layout layout;
+    private final Host host;
     private final AssetServer assets;
     private final Handler ui = new Handler(Looper.getMainLooper());
 
     private final List<Uri> lastExported = new ArrayList<Uri>();
     private boolean busy = false;
     private int savedScrollYcss = 0;
-    private int contentPhysPx = 0;              // 正文总高（物理像素），startCapture 里写入
-    private volatile boolean capturePending = false;
-    private Runnable captureAction;
-    private volatile int lastAckCssY = Integer.MIN_VALUE;
+    private int contentPhysPx = 0;
+    private Runnable watchdog;
     private Callback printCb;
     private Runnable hqReset;
 
-    public Exporter(Activity activity, WebView web, Settings settings, Layout layout, AssetServer assets) {
+    public Exporter(Activity activity, WebView web, Settings settings, Host host, AssetServer assets) {
         this.activity = activity;
         this.web = web;
         this.settings = settings;
-        this.layout = layout;
+        this.host = host;
         this.assets = assets;
     }
 
@@ -143,10 +174,6 @@ public final class Exporter {
         });
     }
 
-    private static int mmToMils(int mm) {
-        return (int) Math.round(mm / 25.4 * 1000);
-    }
-
     private String docNameForPrint() {
         String n = activity.getSharedPreferences("lanyue", Context.MODE_PRIVATE).getString("fileName", null);
         return (n == null || n.isEmpty() ? "文档" : n) + " · 蓝阅";
@@ -173,9 +200,9 @@ public final class Exporter {
     }
 
     /* ==================================================================
-       图片导出
+       长图：软件渲染层 + 同步逐屏绘制
        ================================================================== */
-    public void exportImages(String mode, String payloadJson, Callback cb) {
+    public void exportImages(String mode, String payloadJson, final Callback cb) {
         if (busy) {
             cb.done(false, "正在导出中，请稍候", null);
             return;
@@ -184,215 +211,161 @@ public final class Exporter {
             cb.done(false, "页面未就绪", null);
             return;
         }
-        int vpCss = Math.max(1, layout.viewportHeightCss());
-        int vpH = web.getHeight();
-        final float scale = (float) vpH / (float) vpCss;          // 物理像素 / CSS 像素
-        final int w = web.getWidth();
-        final int contentPhys = Math.max(vpH, Math.round(layout.contentHeightCss() * scale));
-        final int savedCss = layout.scrollYCss();                 // 记住原位置（CSS px）
 
-        int top = 0, bottom = contentPhys;
-        int chunkHint = REQ_CHUNK_PX;
+        int viewportWcss = 0, docHcss = 0, scrollYcss = 0, topCss = 0, bottomCss = 0;
         try {
-            JSONObject p = payloadJson == null || payloadJson.isEmpty() ? new JSONObject() : new JSONObject(payloadJson);
-            if (p.has("chunkHeight")) chunkHint = p.getInt("chunkHeight");
-            if ("selection".equals(mode)) {
-                top = Math.round((float) p.optDouble("top", 0) * scale);
-                bottom = Math.round((float) p.optDouble("bottom", contentPhys) * scale);
-                if (bottom <= top) {
-                    cb.done(false, "选区为空", null);
-                    return;
-                }
-            }
+            JSONObject p = (payloadJson == null || payloadJson.isEmpty())
+                    ? new JSONObject() : new JSONObject(payloadJson);
+            viewportWcss = p.optInt("viewportW", 0);
+            docHcss = p.optInt("contentH", 0);
+            scrollYcss = p.optInt("scrollY", 0);
+            topCss = p.optInt("top", 0);
+            bottomCss = p.optInt("bottom", 0);
         } catch (Throwable ignored) {
         }
-        top = clamp(top, 0, contentPhys - 1);
-        bottom = clamp(bottom, top + 1, contentPhys);
+        int vpHcss = Math.max(1, host.viewportHeightCss());
+        if (docHcss <= 0) docHcss = Math.max(host.contentHeightCss(), vpHcss);
+        if ("viewport".equals(mode)) {
+            topCss = scrollYcss;
+            bottomCss = scrollYcss + vpHcss;
+        } else if (!"selection".equals(mode)) {
+            topCss = 0;
+            bottomCss = docHcss;
+        }
+        topCss = clamp(topCss, 0, Math.max(0, docHcss - 1));
+        bottomCss = clamp(bottomCss, topCss + 1, docHcss);
 
-        final boolean hq = settings.isHqExport();
-        assets.setHighQuality(hq);
+        final int w = web.getWidth();
+        final int vpH = web.getHeight();
+        final float scale = (float) vpH / (float) vpHcss;                  // 物理像素 / CSS 像素
+        final int contentPhys = Math.max(vpH, Math.round(docHcss * scale));
+        final int topPhys = clamp(Math.round(topCss * scale), 0, Math.max(0, contentPhys - 1));
+        final int bottomPhys = clamp(Math.round(bottomCss * scale), topPhys + 1, contentPhys);
+        contentPhysPx = contentPhys;
+        savedScrollYcss = host.scrollYCss();
 
-        // 每片高度按可用堆内存收敛：位图 = w * chunkH * 4 字节
+        // 每片高度按可用堆内存收敛：位图 = w × chunkH × 4 字节
         long maxHeap = Runtime.getRuntime().maxMemory();
-        long budget = Math.max(8L * 1024 * 1024, (long) (maxHeap * 0.30));
-        int memCap = (int) Math.max(1200, budget / (4L * (long) w));
-        final int chunkH = Math.max(400, Math.min(Math.round(chunkHint * scale), Math.min(REQ_CHUNK_PX, memCap)));
+        long budget = Math.max(8L * 1024 * 1024, (long) (maxHeap * 0.28));
+        int memCap = (int) Math.max(1200, budget / (4L * Math.max(1, w)));
+        final int chunkH = Math.max(400, Math.min(REQ_CHUNK_PX, memCap));
 
-        final int fTop = top, fBottom = bottom;
-        final String fMode = mode;
+        List<int[]> ranges = new ArrayList<int[]>();
+        for (int y = topPhys; y < bottomPhys; y += chunkH) {
+            ranges.add(new int[]{y, Math.min(bottomPhys, y + chunkH)});
+        }
+        Log.i(TAG, "long-image start mode=" + mode + " chunks=" + ranges.size() + " chunkH=" + chunkH
+                + " content=" + contentPhys + "px vp=" + vpH + "px region=" + topPhys + ".." + bottomPhys
+                + " | contentCss=" + docHcss + " vpCss=" + vpHcss + " viewportWcss=" + viewportWcss
+                + " scale=" + String.format(java.util.Locale.US, "%.3f", scale));
 
         busy = true;
-        savedScrollYcss = savedCss;
-        web.setOverScrollMode(View.OVER_SCROLL_NEVER);
-        setTouchLocked(true);
         lastExported.clear();
-
-        ui.post(new Runnable() {
+        armWatchdog(cb);
+        host.showExportOverlay("正在导出长图…");
+        host.setSoftwareLayer(true);
+        ui.postDelayed(new Runnable() {
             @Override
             public void run() {
-                startCapture(fMode, w, chunkH, fTop, fBottom, vpH, contentPhys, cb);
+                captureRange(ranges, 0, 0, new ArrayList<Uri>(), w, vpH, chunkH, cb);
             }
-        });
+        }, LAYER_SWITCH_MS);
     }
 
-    private void startCapture(String mode, int w, int chunkH, int top, int bottom, int vpH, int contentPhys, Callback cb) {
-        List<int[]> ranges = new ArrayList<int[]>();
-        if ("viewport".equals(mode)) {
-            float scale = (float) vpH / (float) Math.max(1, layout.viewportHeightCss());
-            int y = clamp(Math.round(layout.scrollYCss() * scale), 0, Math.max(0, contentPhys - vpH));
-            ranges.add(new int[]{y, y + vpH});
-        } else {
-            for (int y = top; y < bottom; y += chunkH) {
-                ranges.add(new int[]{y, Math.min(bottom, y + chunkH)});
-            }
-        }
-        // 这条日志自带"单位自证"：真机复测长图导出时用它核对换算是否正确
-        // （vpCss/内容高是 CSS px；content/vp/chunkH 是物理 px；scale 应约等于屏幕密度）
-        contentPhysPx = contentPhys;
-        Log.i(TAG, "capture ranges=" + ranges.size() + " chunkH=" + chunkH + "px"
-                + " content=" + contentPhys + "px vp=" + vpH + "px"
-                + " | vpCss=" + layout.viewportHeightCss() + " contentCss=" + layout.contentHeightCss()
-                + " scrollCss=" + layout.scrollYCss()
-                + " scale=" + String.format(java.util.Locale.US, "%.3f", (float) vpH / Math.max(1, layout.viewportHeightCss()))
-                + " | mode=" + mode);
-        captureRange(mode, w, vpH, ranges, 0, 0, new ArrayList<Uri>(), 0, cb);
-    }
-
-    private void captureRange(final String mode, final int w, final int vpH, final List<int[]> ranges,
-                              final int rangeIndex, final int tileIndex, final List<Uri> out,
-                              final int truncatedCount, final Callback cb) {
+    private void captureRange(final List<int[]> ranges, final int rangeIndex, final int tileIndex,
+                              final List<Uri> out, final int w, final int vpH, final int chunkH, final Callback cb) {
         if (rangeIndex >= ranges.size()) {
-            finishImages(mode, out, truncatedCount, cb);
+            finishImages(out, cb);
             return;
         }
         final int[] r = ranges.get(rangeIndex);
         final int rangeH = r[1] - r[0];
         final Bitmap chunk = Bitmap.createBitmap(w, rangeH, Bitmap.Config.ARGB_8888);
-        final Canvas c = new Canvas(chunk);
-        captureTile(mode, w, vpH, ranges, rangeIndex, tileIndex, out, truncatedCount,
-                chunk, c, r[0], rangeH, cb, 0);
+        new Canvas(chunk).drawColor(Color.WHITE);
+        captureTile(ranges, rangeIndex, tileIndex, out, w, vpH, chunkH, chunk, r[0], rangeH, cb, 0);
     }
 
-    /**
-     * 抓一屏。
-     *
-     * 时序不靠固定延时，而是「布防 → 滚动 → 页面回执（滚动后两帧）→ 再抓」：
-     * Chromium 的合成是异步的，只按固定延时抓，很容易抓到还没重新合成的空白帧
-     * （真机 bug「长图只有第一格有内容、之后全白」的成因之一）。
-     */
-    private void captureTile(final String mode, final int w, final int vpH, final List<int[]> ranges,
-                             final int rangeIndex, final int tileIndex, final List<Uri> out,
-                             final int truncatedCount, final Bitmap chunk, final Canvas canvas,
-                             final int rangeTop, final int rangeH, final Callback cb, final int attempt) {
+    private void captureTile(final List<int[]> ranges, final int rangeIndex, final int tileIndex,
+                             final List<Uri> out, final int w, final int vpH, final int chunkH,
+                             final Bitmap chunk, final int rangeTop, final int rangeH,
+                             final Callback cb, final int attempt) {
         final int[] r = ranges.get(rangeIndex);
         final int y = rangeTop + tileIndex * vpH;
         if (y >= r[1]) {
             // 本片抓完：写盘
-            saveChunk(mode, chunk, rangeIndex, ranges.size(), new ChunkSaver() {
-                @Override
-                public void onSaved(Uri uri, int truncated) {
-                    chunk.recycle();
-                    List<Uri> next = out;
-                    if (uri != null) next.add(uri);
-                    captureRange(mode, w, vpH, ranges, rangeIndex + 1, 0, next, truncatedCount + truncated, cb);
-                }
-            });
+            saveImage(chunk, rangeIndex + 1, ranges.size());
+            chunk.recycle();
+            captureRange(ranges, rangeIndex + 1, 0, out, w, vpH, chunkH, cb);
             return;
         }
-        // 滚到底部时 WebView 会钳制在最大滚动位置：这时改用「重叠贴图」，
-        // 按实际位置把这一屏画进片里，避免最后一片重复最后一屏、或者抓成空白。
+        // 滚到底部时 WebView 会钳制在最大滚动位置：按"实际位置"贴图，末片才不会重复最后一屏
         final int maxScroll = Math.max(0, contentPhysPx - vpH);
         final int target = clamp(y, 0, maxScroll);
         final int dstOffset = Math.max(0, target - rangeTop);
         final int drawH = Math.min(vpH, Math.max(0, rangeH - dstOffset));
-        final float scale = (float) vpH / (float) Math.max(1, layout.viewportHeightCss());
-        final int targetCss = Math.round(target / Math.max(0.01f, scale));
 
-        capturePending = true;
-        captureAction = new Runnable() {
+        host.scrollToPhys(target);
+        host.updateExportOverlay(rangeIndex + 1, ranges.size());
+        // 软件路径下 draw() 才是真正的光栅化时点，所以这里等两帧只是让滚动状态落定
+        web.postOnAnimation(new Runnable() {
             @Override
             public void run() {
-                ui.postDelayed(new Runnable() {
+                web.postOnAnimation(new Runnable() {
                     @Override
                     public void run() {
-                        doCaptureTile(mode, w, vpH, ranges, rangeIndex, tileIndex, out, truncatedCount,
-                                chunk, canvas, rangeTop, rangeH, cb, attempt, y, target, dstOffset, drawH);
+                        ui.postDelayed(new Runnable() {
+                            @Override
+                            public void run() {
+                                drawTile(ranges, rangeIndex, tileIndex, out, w, vpH, chunkH, chunk,
+                                        rangeTop, rangeH, cb, attempt, y, target, dstOffset, drawH);
+                            }
+                        }, SETTLE_MS);
                     }
-                }, ACK_EXTRA_MS);
+                });
             }
-        };
-        // 先布防回执再滚动（顺序不能反：布防时若已经就在目标位置，页面会立刻回执）
-        web.evaluateJavascript("(function(){try{return LanyueApp.armScrollAck(" + targetCss
-                + ");}catch(e){return 0;}})()", null);
-        layout.scrollToPhys(target);
-        ui.postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                if (capturePending) {
-                    Log.w(TAG, "滚动回执超时，仍然继续抓图 y=" + target);
-                    fireCapture();
-                }
-            }
-        }, ACK_TIMEOUT_MS);
+        });
     }
 
-    /** 页面滚动回执（由 AppBridge 转发）：与超时兜底只认先到的那个 */
-    public void onScrollSettled(int cssY) {
-        lastAckCssY = cssY;
-        if (busy && capturePending) fireCapture();
-    }
-
-    private void fireCapture() {
-        if (!capturePending) return;
-        capturePending = false;
-        Runnable a = captureAction;
-        captureAction = null;
-        if (a != null) a.run();
-    }
-
-    private void doCaptureTile(final String mode, final int w, final int vpH, final List<int[]> ranges,
-                               final int rangeIndex, final int tileIndex, final List<Uri> out,
-                               final int truncatedCount, final Bitmap chunk, final Canvas canvas,
-                               final int rangeTop, final int rangeH, final Callback cb, final int attempt,
-                               final int requestedY, final int target, final int dstOffset, final int drawH) {
+    private void drawTile(final List<int[]> ranges, final int rangeIndex, final int tileIndex,
+                          final List<Uri> out, final int w, final int vpH, final int chunkH,
+                          final Bitmap chunk, final int rangeTop, final int rangeH, final Callback cb,
+                          final int attempt, final int requestedY, final int target,
+                          final int dstOffset, final int drawH) {
         Bitmap tile = null;
         try {
             tile = Bitmap.createBitmap(w, vpH, Bitmap.Config.ARGB_8888);
             web.draw(new Canvas(tile));
             float blank = blankRatio(tile);
             Log.i(TAG, "tile " + rangeIndex + "." + tileIndex + " req=" + requestedY + " actual=" + target
-                    + " ackCss=" + lastAckCssY + " blank="
-                    + String.format(java.util.Locale.US, "%.3f", blank)
+                    + " blank=" + String.format(java.util.Locale.US, "%.3f", blank)
                     + (attempt > 0 ? " retry=" + attempt : ""));
             if (blank >= BLANK_RATIO && attempt < BLANK_RETRY) {
-                // 整屏同色：大概率是滚动后画面还没产出。等久一点重抓；
-                // 重试后仍为同色就接受（那片可能确实是空白区域）。
                 tile.recycle();
                 tile = null;
                 ui.postDelayed(new Runnable() {
                     @Override
                     public void run() {
-                        captureTile(mode, w, vpH, ranges, rangeIndex, tileIndex, out, truncatedCount,
-                                chunk, canvas, rangeTop, rangeH, cb, attempt + 1);
+                        captureTile(ranges, rangeIndex, tileIndex, out, w, vpH, chunkH, chunk,
+                                rangeTop, rangeH, cb, attempt + 1);
                     }
-                }, 300L * (attempt + 1));
+                }, 250L * (attempt + 1));
                 return;
             }
             if (drawH > 0) {
                 android.graphics.Rect src = new android.graphics.Rect(0, 0, w, drawH);
                 android.graphics.Rect dst = new android.graphics.Rect(0, dstOffset, w, dstOffset + drawH);
-                canvas.drawBitmap(tile, src, dst, null);
+                new Canvas(chunk).drawBitmap(tile, src, dst, null);
             }
         } catch (Throwable t) {
-            Log.w(TAG, "tile capture failed", t);
+            Log.w(TAG, "tile draw failed", t);
         } finally {
             if (tile != null) tile.recycle();
         }
-        captureTile(mode, w, vpH, ranges, rangeIndex, tileIndex + 1, out, truncatedCount,
-                chunk, canvas, rangeTop, rangeH, cb, 0);
+        captureTile(ranges, rangeIndex, tileIndex + 1, out, w, vpH, chunkH, chunk,
+                rangeTop, rangeH, cb, 0);
     }
 
-    /** 采样统计「整屏同色」比例：用来识别「滚动后尚未重新合成」的空白帧 */
+    /** 采样统计「整屏同色」比例：识别"这一屏压根没画出来" */
     private static float blankRatio(Bitmap bmp) {
         try {
             int w = bmp.getWidth(), h = bmp.getHeight();
@@ -408,59 +381,53 @@ public final class Exporter {
             }
             return total == 0 ? 1f : (float) same / (float) total;
         } catch (Throwable t) {
-            return 0f;      // 采样本身失败就当「有内容」，不要因此反复重试
+            return 0f;      // 采样失败就当"有内容"，不要因此反复重试
         }
     }
 
-    private interface ChunkSaver {
-        void onSaved(Uri uri, int truncated);
-    }
-
-    private void saveChunk(final String mode, final Bitmap chunk, final int index, final int total, final ChunkSaver saver) {
-        final String name = "lanyue-" + stamp() + (total > 1 ? "-" + pad(index + 1, 3) : "") + ".png";
-        // ② 优先写进系统相册（API 29+ 免权限）；失败或低版本则落到 cacheDir/share 供分享
-        if (Build.VERSION.SDK_INT >= 29) {
-            Uri uri = insertIntoMediaStore(chunk, name);
-            if (uri != null) {
-                saver.onSaved(uri, 0);
-                return;
-            }
-        }
-        File dir = ShareProvider.shareDir(activity);
-        File f = new File(dir, name);
-        OutputStream os = null;
+    /* ==================================================================
+       落盘与收尾
+       ================================================================== */
+    private void saveImage(Bitmap bmp, int index, int total) {
+        final String name = "lanyue-" + stamp() + (total > 1 ? "-" + pad(index, 3) : "") + ".png";
         try {
-            os = new FileOutputStream(f);
-            chunk.compress(Bitmap.CompressFormat.PNG, 100, os);
-            os.flush();
-            os.close();
-            os = null;
-            lastExported.add(ShareProvider.uriFor(activity, f));
-            Log.i(TAG, "chunk " + (index + 1) + "/" + total + " " + name + " bytes=" + f.length());
-            saver.onSaved(ShareProvider.uriFor(activity, f), 0);
-        } catch (Throwable t) {
-            Log.w(TAG, "save chunk failed", t);
-            saver.onSaved(null, 1);
-        } finally {
-            if (os != null) {
-                try {
-                    os.close();
-                } catch (Exception ignored) {
+            if (Build.VERSION.SDK_INT >= 29) {
+                Uri uri = insertIntoMediaStore(bmp, name);
+                if (uri != null) {
+                    Log.i(TAG, "saved " + name + " " + bmp.getWidth() + "x" + bmp.getHeight());
+                    return;
                 }
             }
+            File dir = ShareProvider.shareDir(activity);
+            File f = new File(dir, name);
+            OutputStream os = null;
+            try {
+                os = new FileOutputStream(f);
+                bmp.compress(Bitmap.CompressFormat.PNG, 100, os);
+                os.flush();
+                os.close();
+                os = null;
+                lastExported.add(ShareProvider.uriFor(activity, f));
+                Log.i(TAG, "saved " + name + " bytes=" + f.length());
+            } catch (Throwable t) {
+                Log.w(TAG, "save image failed", t);
+            } finally {
+                closeQuietly(os);
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "saveImage failed", t);
         }
     }
 
     private Uri insertIntoMediaStore(Bitmap bmp, String name) {
         OutputStream os = null;
-        Uri uri = null;
         try {
             ContentValues v = new ContentValues();
             v.put(MediaStore.Images.Media.DISPLAY_NAME, name);
             v.put(MediaStore.Images.Media.MIME_TYPE, "image/png");
             v.put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/蓝阅");
             v.put(MediaStore.Images.Media.IS_PENDING, 1);
-            uri = activity.getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, v);
+            Uri uri = activity.getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, v);
             if (uri == null) return null;
             os = activity.getContentResolver().openOutputStream(uri);
             if (os == null) return null;
@@ -477,30 +444,66 @@ public final class Exporter {
             Log.w(TAG, "mediastore insert failed", t);
             return null;
         } finally {
-            if (os != null) {
-                try {
-                    os.close();
-                } catch (Exception ignored) {
-                }
-            }
+            closeQuietly(os);
         }
     }
 
-    private void finishImages(String mode, List<Uri> out, int truncated, Callback cb) {
-        float scale = (float) Math.max(1, web.getHeight()) / (float) Math.max(1, layout.viewportHeightCss());
-        layout.scrollToPhys(Math.round(savedScrollYcss * scale));
-        assets.setHighQuality(false);
-        setTouchLocked(false);
+    private void finishImages(List<Uri> out, Callback cb) {
+        endImageMode();
+        clearWatchdog();
         busy = false;
-        if (out.isEmpty()) {
-            cb.done(false, truncated > 0 ? "导出失败（内存不足）" : "没有任何内容可导出", null);
+        assets.setHighQuality(false);
+        if (out == null || out.isEmpty()) {
+            cb.done(false, "没有任何内容可导出", null);
             return;
         }
         String where = Build.VERSION.SDK_INT >= 29 ? "已保存到相册 Pictures/蓝阅" : "已保存到应用缓存（可分享）";
-        String msg = out.size() == 1
-                ? "已导出 1 张，" + where
-                : "已导出 " + out.size() + " 张" + ("viewport".equals(mode) ? "" : "（自动分片）") + "，" + where;
-        cb.done(true, msg, out.size() > 0 ? out.get(0).toString() : null);
+        String msg = out.size() == 1 ? "已导出 1 张，" + where
+                : "已导出 " + out.size() + " 张（自动分片），" + where;
+        cb.done(true, msg, out.get(0).toString());
+    }
+
+    private void fail(Callback cb, String msg) {
+        endImageMode();
+        clearWatchdog();
+        busy = false;
+        assets.setHighQuality(false);
+        cb.done(false, msg, null);
+    }
+
+    /** 收尾：恢复硬件渲染层、恢复滚动位置、隐藏覆盖层 */
+    private void endImageMode() {
+        ui.post(new Runnable() {
+            @Override
+            public void run() {
+                if (contentPhysPx > 0) {
+                    float scale = (float) Math.max(1, web.getHeight())
+                            / (float) Math.max(1, host.viewportHeightCss());
+                    host.scrollToPhys(Math.round(savedScrollYcss * scale));
+                }
+                host.setSoftwareLayer(false);
+                host.hideExportOverlay();
+            }
+        });
+    }
+
+    private void armWatchdog(final Callback cb) {
+        clearWatchdog();
+        watchdog = new Runnable() {
+            @Override
+            public void run() {
+                Log.w(TAG, "watchdog fired");
+                fail(cb, "导出超时，请重试");
+            }
+        };
+        ui.postDelayed(watchdog, WATCHDOG_MS);
+    }
+
+    private void clearWatchdog() {
+        if (watchdog != null) {
+            ui.removeCallbacks(watchdog);
+            watchdog = null;
+        }
     }
 
     /* ==================================================================
@@ -541,19 +544,6 @@ public final class Exporter {
     /* ==================================================================
        小工具
        ================================================================== */
-    private void setTouchLocked(boolean locked) {
-        if (locked) {
-            web.setOnTouchListener(new View.OnTouchListener() {
-                @Override
-                public boolean onTouch(View v, MotionEvent event) {
-                    return true;    // 导出期间禁止用户滚动干扰抓取
-                }
-            });
-        } else {
-            web.setOnTouchListener(null);
-        }
-    }
-
     private static int clamp(int v, int lo, int hi) {
         return v < lo ? lo : (v > hi ? hi : v);
     }
@@ -567,5 +557,13 @@ public final class Exporter {
     private static String stamp() {
         java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US);
         return f.format(new java.util.Date());
+    }
+
+    private static void closeQuietly(Object c) {
+        if (c == null) return;
+        try {
+            if (c instanceof OutputStream) ((OutputStream) c).close();
+        } catch (Throwable ignored) {
+        }
     }
 }
