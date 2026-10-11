@@ -6,12 +6,12 @@
 > Or got buried under those 100 MB "readers" that push a subscription before page one and drop an ad mid-sentence?
 > **Lanyue exists to end exactly that.**
 
-![APK](https://img.shields.io/badge/APK-481%20KB-blue)
+![APK](https://img.shields.io/badge/APK-477%20KB-blue)
 ![Permissions](https://img.shields.io/badge/permissions-none-brightgreen)
 ![Android](https://img.shields.io/badge/Android-8.0%2B-3ddc84)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-**481 KB. Zero permissions. Zero network.** And yet it has everything that matters:
+**477 KB. Zero permissions. Zero network.** And yet it has everything that matters:
 math rendering, syntax highlighting, tables, images, table of contents, search, reading-position memory,
 a lightweight editor, and PDF / current-screen image export.
 
@@ -19,7 +19,7 @@ How small is that? — **about one fifth of a random screenshot sitting in your 
 
 | | Size |
 |---|---|
-| Lanyue | **481 KB** |
+| Lanyue | **477 KB** |
 | One screenshot from your phone | 1–3 MB (2–6× bigger) |
 | A typical "all-in-one reader" | 30–120 MB (60–250× bigger) |
 
