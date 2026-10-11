@@ -68,7 +68,9 @@
 
   /* ---------------- 状态 ---------------- */
   var state = null;
-  var currentView = 'home';      // 'home' | 'doc'：顶栏据此决定显示返回箭头还是应用名
+  var currentView = 'home';
+  var exportingSince = 0;         // 进入"导出态"的时间戳（顶栏此时被 CSS 隐藏）
+  var imageExportInFlight = false;      // 'home' | 'doc'：顶栏据此决定显示返回箭头还是应用名
   var sourceText = '';
   var pipelineResult = null;
   var chunks = [], renderedChunks = 0, chunkSentinels = [];
@@ -628,6 +630,7 @@
   function prepareForExport() {
     // 关键：顶栏是 position:fixed，逐屏抓取会让它出现在每一片里 —— 导出期间整体隐藏
     document.documentElement.classList.add('exporting');
+    exportingSince = Date.now();
     // 大文档先把所有分片渲染出来，并强制图片立即解码，避免导出出现空白
     if (chunks.length) renderAllChunks();
     var imgs = doc.querySelectorAll('img');
@@ -668,6 +671,7 @@
       payload.bottom = Math.round(bottom + window.scrollY);
       sel.removeAllRanges();
     }
+    imageExportInFlight = true;      // 图片导出可能持续十几秒，兜底逻辑要避开它
     B.toast(mode === 'viewport' ? '正在导出当前屏…' : '正在导出长图…');
     prepareForExport().then(function () {
       updateLayout();
@@ -795,6 +799,7 @@
     var pinch = null, pan = null, down = null;
     var lastTapAt = 0, lastTapX = 0, lastTapY = 0;
     var closeTimer = 0;          // "单击空白处延迟关闭"的定时器，双击时必须取消
+    var gestureEndTimer = 0;     // 手势结束后恢复过渡的兜底定时器
     var opened = false, ready = false;
 
     function init() {
@@ -830,6 +835,30 @@
       maxScale = Math.min(3, byTexture);
       if (maxScale < fitScale * 2.5) maxScale = fitScale * 2.5;   // 至少还能放大 2.5 倍
       if (maxScale > 3) maxScale = 3;
+    }
+
+    /**
+     * 手势期间必须关掉 CSS 过渡。
+     * 只写了 .lightbox.dragging img { transition: none } 而从不加这个类，
+     * 等于每帧的 transform 都被 .16s 的动画追着补间 —— 手感就是"一段一段地跳"。
+     */
+    function beginGesture() {
+      if (lb && !lb.classList.contains('dragging')) lb.classList.add('dragging');
+    }
+
+    function endGesture() {
+      // 下一帧再恢复过渡：本轮手势的最后一帧不该被动画补间，否则会有轻微跳感
+      var raf = window.requestAnimationFrame || function (fn) { return setTimeout(fn, 16); };
+      raf(function () { if (lb) lb.classList.remove('dragging'); });
+      // 双保险：rAF 在"没有帧产出"的环境里（页面不可见、部分无头渲染）不会触发，
+      // 那样 dragging 类会永远留着，过渡再也回不来。定时器兜底，且只在手指都抬起时才摘。
+      if (gestureEndTimer) clearTimeout(gestureEndTimer);
+      gestureEndTimer = setTimeout(function () {
+        gestureEndTimer = 0;
+        if (!lb) return;
+        if (Object.keys(pointers).length === 0) lb.classList.remove('dragging');
+        else endGesture();          // 还有手指按着：下一轮再说
+      }, 60);
     }
 
     function apply() {
@@ -964,6 +993,7 @@
 
     function onDown(e) {
       if (!opened) return;
+      beginGesture();
       try { if (lb.setPointerCapture) lb.setPointerCapture(e.pointerId); } catch (err) {
         // 合成事件/个别 WebView 实现下会抛 NotFoundError —— 抓不到捕获不影响手势
       }
@@ -1011,6 +1041,7 @@
       if (ids.length < 2) pinch = null;
       if (ids.length === 0) {
         pan = null;
+        endGesture();
         if (was && !was.moved && Date.now() - was.t < 320) {
           var now = Date.now();
           var isDouble = (now - lastTapAt < 300) && Math.abs(e.clientX - lastTapX) < 40 && Math.abs(e.clientY - lastTapY) < 40;
@@ -1036,6 +1067,8 @@
     function onWheel(e) {
       if (!opened) return;
       e.preventDefault();
+      beginGesture();
+      endGesture();
       var factor = Math.pow(1.0015, -e.deltaY);
       zoomAt(e.clientX, e.clientY, factor);
     }
@@ -1064,6 +1097,7 @@
     toast: function (msg) { toast(msg); },
     notify: function (kind, ok, msg) {
       toast(msg);
+      if (kind === 'export') imageExportInFlight = false;
       if (ok && (kind === 'pdf' || kind === 'image')) lastExportPayload = msg;
     },
     /** 返回键：先关灯箱、再关面板；返回 true 表示"我处理掉了" */
@@ -1087,6 +1121,7 @@
     /** 原生导出结束（无论成败）：恢复固定顶栏 */
     exportFinished: function () {
       document.documentElement.classList.remove('exporting');
+      exportingSince = 0;
       return true;
     },
     reloadDoc: function () { if (!window.__MOCK__) loadDoc(); return 1; },
@@ -1114,6 +1149,17 @@
     else if (k === 'act-img-sel') exportImages('selection');
     else if (k === 'act-share') { closePanels(); B.shareLast(); }
     else if (k === 'act-close') closePanels();
+  });
+
+  // 兜底：从系统打印界面返回时，原生侧理论上会调 exportFinished()；
+  // 万一没调到（不同 ROM 的返回路径不一致），这里自行恢复，避免"导航栏凭空消失"。
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) return;
+    if (exportingSince && !imageExportInFlight &&
+        document.documentElement.classList.contains('exporting')) {
+      document.documentElement.classList.remove('exporting');
+      exportingSince = 0;
+    }
   });
 
   window.LanyueZoom = Zoom;      // 供无头测试驱动

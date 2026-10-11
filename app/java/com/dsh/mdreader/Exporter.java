@@ -48,15 +48,25 @@ public final class Exporter {
         void done(boolean ok, String msg, String shareUri);
     }
 
-    /** 由 MainActivity 提供 WebView 的几何信息（数值来自 JS 上报的 CSS 像素） */
+    /**
+     * 由 MainActivity 提供 WebView 的几何信息。
+     *
+     * **单位必须显式写清**：CSS 像素（网页里的 px）与物理像素（View 的 px）相差一个 density，
+     * 早期版本把物理像素传给了"按 CSS 像素换算"的 scrollTo()，于是每步滚动被多乘了一次 density，
+     * 结果就是"长图只有第一格有内容，后面全白"。方法名里带 Css / Phys 就是为了不再犯。
+     */
     public interface Layout {
-        int contentHeight();
+        /** 正文总高度（CSS px） */
+        int contentHeightCss();
 
-        int viewportHeight();
+        /** 视口高度（CSS px） */
+        int viewportHeightCss();
 
-        int scrollY();
+        /** 当前滚动位置（CSS px） */
+        int scrollYCss();
 
-        void scrollTo(int y);
+        /** 滚动到指定位置（**物理像素**） */
+        void scrollToPhys(int physY);
     }
 
     private final Activity activity;
@@ -68,7 +78,7 @@ public final class Exporter {
 
     private final List<Uri> lastExported = new ArrayList<Uri>();
     private boolean busy = false;
-    private int savedScrollY = 0;
+    private int savedScrollYcss = 0;
     private Callback printCb;
     private Runnable hqReset;
 
@@ -108,9 +118,12 @@ public final class Exporter {
                         return;
                     }
                     PrintDocumentAdapter adapter = web.createPrintDocumentAdapter(jobName);
+                    // 边距不在原生侧设：WebView 的打印适配器会忽略 MinMargins，
+                    // 真机实测表现为"内容顶满左右两侧"。改由 CSS 的 @page 控制（见 app.css 打印段），
+                    // 这里显式给 0 以免某些机型把两套边距叠加。
                     PrintAttributes attrs = new PrintAttributes.Builder()
                             .setMediaSize(PrintAttributes.MediaSize.ISO_A4)
-                            .setMinMargins(new PrintAttributes.Margins(mmToMils(15), mmToMils(15), mmToMils(15), mmToMils(15)))
+                            .setMinMargins(PrintAttributes.Margins.NO_MARGINS)
                             .setColorMode(PrintAttributes.COLOR_MODE_COLOR)
                             .build();
                     pm.print(jobName, adapter, attrs);
@@ -164,11 +177,12 @@ public final class Exporter {
             cb.done(false, "页面未就绪", null);
             return;
         }
-        int vpCss = Math.max(1, layout.viewportHeight());
+        int vpCss = Math.max(1, layout.viewportHeightCss());
         int vpH = web.getHeight();
         final float scale = (float) vpH / (float) vpCss;          // 物理像素 / CSS 像素
         final int w = web.getWidth();
-        final int contentPhys = Math.max(vpH, Math.round(layout.contentHeight() * scale));
+        final int contentPhys = Math.max(vpH, Math.round(layout.contentHeightCss() * scale));
+        final int savedCss = layout.scrollYCss();                 // 记住原位置（CSS px）
 
         int top = 0, bottom = contentPhys;
         int chunkHint = REQ_CHUNK_PX;
@@ -201,7 +215,7 @@ public final class Exporter {
         final String fMode = mode;
 
         busy = true;
-        savedScrollY = layout.scrollY();
+        savedScrollYcss = savedCss;
         web.setOverScrollMode(View.OVER_SCROLL_NEVER);
         setTouchLocked(true);
         lastExported.clear();
@@ -217,14 +231,22 @@ public final class Exporter {
     private void startCapture(String mode, int w, int chunkH, int top, int bottom, int vpH, int contentPhys, Callback cb) {
         List<int[]> ranges = new ArrayList<int[]>();
         if ("viewport".equals(mode)) {
-            int y = clamp(layout.scrollY(), 0, Math.max(0, contentPhys - vpH));
+            float scale = (float) vpH / (float) Math.max(1, layout.viewportHeightCss());
+            int y = clamp(Math.round(layout.scrollYCss() * scale), 0, Math.max(0, contentPhys - vpH));
             ranges.add(new int[]{y, y + vpH});
         } else {
             for (int y = top; y < bottom; y += chunkH) {
                 ranges.add(new int[]{y, Math.min(bottom, y + chunkH)});
             }
         }
-        Log.i(TAG, "capture ranges=" + ranges.size() + " chunkH=" + chunkH + " content=" + contentPhys + " vp=" + vpH);
+        // 这条日志自带"单位自证"：真机复测长图导出时用它核对换算是否正确
+        // （vpCss/内容高是 CSS px；content/vp/chunkH 是物理 px；scale 应约等于屏幕密度）
+        Log.i(TAG, "capture ranges=" + ranges.size() + " chunkH=" + chunkH + "px"
+                + " content=" + contentPhys + "px vp=" + vpH + "px"
+                + " | vpCss=" + layout.viewportHeightCss() + " contentCss=" + layout.contentHeightCss()
+                + " scrollCss=" + layout.scrollYCss()
+                + " scale=" + String.format(java.util.Locale.US, "%.3f", (float) vpH / Math.max(1, layout.viewportHeightCss()))
+                + " | mode=" + mode);
         captureRange(mode, w, vpH, ranges, 0, 0, new ArrayList<Uri>(), 0, cb);
     }
 
@@ -261,8 +283,7 @@ public final class Exporter {
             });
             return;
         }
-        final int scrollTarget = y;
-        layout.scrollTo(scrollTarget);
+        layout.scrollToPhys(y);      // y 是物理像素（见 Layout 的注释）
         ui.postDelayed(new Runnable() {
             @Override
             public void run() {
@@ -359,7 +380,8 @@ public final class Exporter {
     }
 
     private void finishImages(String mode, List<Uri> out, int truncated, Callback cb) {
-        layout.scrollTo(savedScrollY);
+        float scale = (float) Math.max(1, web.getHeight()) / (float) Math.max(1, layout.viewportHeightCss());
+        layout.scrollToPhys(Math.round(savedScrollYcss * scale));
         assets.setHighQuality(false);
         setTouchLocked(false);
         busy = false;

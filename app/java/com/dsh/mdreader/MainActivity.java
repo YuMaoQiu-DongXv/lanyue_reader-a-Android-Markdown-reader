@@ -132,6 +132,9 @@ public final class MainActivity extends Activity implements AssetServer.DocSourc
     protected void onResume() {
         super.onResume();
         if (exporter != null) exporter.onActivityResumed();
+        // 导出期间 JS 会给 <html> 加 .exporting 把固定顶栏藏起来（否则逐屏抓图会把顶栏拼进每一片）。
+        // 从系统打印界面返回时不一定走到导出回调，所以这里无条件兜底恢复一次。
+        web.evaluateJavascript("(function(){try{return LanyueApp.exportFinished();}catch(e){return 0;}})()", null);
         pushStateToWeb();
     }
 
@@ -781,6 +784,8 @@ public final class MainActivity extends Activity implements AssetServer.DocSourc
         public void done(boolean ok, String msg, String shareUri) {
             toast(msg);
             notifyWeb("export", ok, msg);
+            web.post(() -> web.evaluateJavascript(
+                    "(function(){try{return LanyueApp.exportFinished();}catch(e){return 0;}})()", null));
         }
     };
 
@@ -888,24 +893,23 @@ public final class MainActivity extends Activity implements AssetServer.DocSourc
        ================================================================== */
 
     @Override
-    public int contentHeight() {
+    public int contentHeightCss() {
         return cssContentHeight;
     }
 
     @Override
-    public int viewportHeight() {
+    public int viewportHeightCss() {
         return cssViewportHeight;
     }
 
     @Override
-    public int scrollY() {
+    public int scrollYCss() {
         return cssScrollY;
     }
 
     @Override
-    public void scrollTo(int cssY) {
-        float density = getResources().getDisplayMetrics().density;
-        final int px = Math.round(cssY * density);
+    public void scrollToPhys(int physY) {
+        final int px = Math.max(0, physY);      // 入参已经是物理像素，不再乘 density
         web.post(() -> web.scrollTo(0, px));
     }
 

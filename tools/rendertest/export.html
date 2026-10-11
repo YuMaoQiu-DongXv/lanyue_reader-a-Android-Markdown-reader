@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>蓝阅 · 导出与打印自查</title>
+<style>
+  body { font: 12px/1.6 ui-monospace, Consolas, monospace; margin: 0; padding: 12px; background: #0b1220; color: #cfe0f7; }
+  h1 { font-size: 14px; color: #7fb2ff; margin: 0 0 8px; }
+  .sum { padding: 8px 10px; border-radius: 6px; margin-bottom: 10px; font-weight: 700; }
+  .sum.pass { background: #10361f; color: #6ee7a8; }
+  .sum.fail { background: #3a1212; color: #ff9a9a; }
+  #results { white-space: pre-wrap; }
+  .p { color: #6ee7a8; } .f { color: #ff9a9a; font-weight: 700; }
+  #verdict { position: fixed; left: -9999px; }
+  iframe { width: 400px; height: 640px; border: 1px solid #24406b; }
+</style>
+</head>
+<body>
+<h1>导出与打印自查（打印边距 / 导出态顶栏 / 网址洪流）</h1>
+<div class="sum" id="sum">running…</div>
+<pre id="results"></pre>
+<iframe id="f" src="index.html?doc=testdoc/acceptance.md&imgbase=./testdoc/"></iframe>
+<div id="verdict">running</div>
+
+<script>
+var lines = [], pass = 0, fail = 0;
+function ok(name, cond, extra) {
+  if (cond) { pass++; lines.push('PASS  ' + name); }
+  else { fail++; lines.push('FAIL  ' + name + (extra !== undefined ? '   >> ' + extra : '')); }
+}
+
+document.getElementById('f').onload = function () { setTimeout(run, 1200); };
+
+function run() {
+  var win = document.getElementById('f').contentWindow;
+  var doc = win.document;
+
+  // ---------- 收集全部 CSS 文本（含 @media print 内部）----------
+  var allCss = '', pageRule = null, printRuleCount = 0;
+  Array.prototype.forEach.call(doc.styleSheets, function (ss) {
+    var rules;
+    try { rules = ss.cssRules; } catch (e) { return; }
+    if (!rules) return;
+    Array.prototype.forEach.call(rules, function (r) {
+      allCss += r.cssText + '\n';
+      if (r.type === 4 && /print/.test(r.media.mediaText)) {   // 4 = CSSMediaRule
+        printRuleCount++;
+        Array.prototype.forEach.call(r.cssRules, function (inner) {
+          allCss += inner.cssText + '\n';
+          if (inner.type === 6) pageRule = inner;               // 6 = CSSPageRule
+        });
+      }
+    });
+  });
+
+  ok('CSS 里存在 @media print 段', printRuleCount > 0, 'printRuleCount=' + printRuleCount);
+  ok('打印段里定义了 @page 规则', !!pageRule, pageRule ? pageRule.cssText : '（没找到 —— 这正是真机上"内容顶满左右两侧"的原因）');
+  if (pageRule) {
+    var margin = pageRule.style.margin || '';
+    ok('@page 页边距非零', /\d/.test(margin) && !/^0/.test(margin.replace(/\s/g, '')), 'margin="' + margin + '"');
+    ok('@page 指定了 A4', /A4/i.test(pageRule.style.size || pageRule.cssText), pageRule.cssText);
+  }
+
+  // ---------- 上一轮的真机问题：打印时给每个链接补印 URL ----------
+  // 判据：整份 CSS 里不允许再出现把 href 内容写进正文的规则
+  ok('CSS 里没有 attr(href) 打印规则（否则会糊满网址）', allCss.indexOf('attr(href)') < 0);
+
+  // ---------- 导出态：顶栏必须被隐藏，且必须能恢复 ----------
+  var tb = doc.getElementById('topbar');
+  var normal = win.getComputedStyle(tb).display;
+  ok('平时顶栏可见', normal !== 'none', 'display=' + normal);
+
+  doc.documentElement.classList.add('exporting');
+  var during = win.getComputedStyle(tb).display;
+  ok('导出态隐藏固定顶栏（逐屏抓图才不会把顶栏拼进每一片）', during === 'none', 'display=' + during);
+
+  // 这一条直接测原生侧调用的那个 API：真机上报"导出返回后导航栏消失"，
+  // 根因就是 Java 从来没有调用过它
+  var restored = false;
+  try {
+    win.LanyueApp.exportFinished();
+    restored = win.getComputedStyle(tb).display !== 'none';
+  } catch (e) { restored = false; }
+  ok('LanyueApp.exportFinished() 能恢复顶栏', restored,
+     'display=' + win.getComputedStyle(tb).display + ' classList=' + doc.documentElement.className);
+
+  var leftover = doc.documentElement.classList.contains('exporting');
+  ok('exportFinished() 摘掉了 exporting 类', !leftover, doc.documentElement.className);
+
+  // ---------- 打印断页规则仍在（回归检查）----------
+  ok('打印段仍声明了代码块/表格不跨页断开', /break-inside:\s*avoid/.test(allCss));
+
+  finish();
+}
+
+function finish() {
+  document.getElementById('results').innerHTML = lines.map(function (l) {
+    return '<span class="' + (l.indexOf('PASS') === 0 ? 'p' : 'f') + '">' +
+      l.replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</span>';
+  }).join('\n');
+  var sum = document.getElementById('sum');
+  sum.className = 'sum ' + (fail === 0 ? 'pass' : 'fail');
+  sum.textContent = (fail === 0 ? 'ALL PASS' : 'FAILURES PRESENT') + ' — pass=' + pass + ' fail=' + fail;
+  document.getElementById('verdict').textContent = 'EXPORT pass=' + pass + ' fail=' + fail;
+}
+</script>
+</body>
+</html>

@@ -596,8 +596,10 @@ html.exporting .toast { display: none !important; }
 html.exporting body { padding-top: 0 !important; }
 
 /* ---------------- 打印（PDF 导出） ---------------- */
-/* 页面尺寸与边距由原生 PrintAttributes 控制，这里只管排版与断页 */
+/* 页边距必须由 CSS 的 @page 控制：WebView 的打印适配器会忽略 PrintAttributes.MinMargins，
+   真机实测表现为"正文顶满左右两侧、毫无页边距"。原生侧因此把 MinMargins 显式设为 0。 */
 @media print {
+  @page { size: A4; margin: 15mm 14mm; }
   :root { --bar-h: 0px; --inset-top: 0px; --inset-bottom: 0px; }
   html, body { background: #fff !important; color: #000 !important; }
   body { padding: 0 !important; }

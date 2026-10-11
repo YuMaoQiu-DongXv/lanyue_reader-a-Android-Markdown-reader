@@ -68,6 +68,11 @@ function run() {
     ok('并非撑满全屏（图比屏幕小时留白）', st.natW * st.scale <= st.vw + 1 && st.natH * st.scale <= st.vh + 1,
        Math.round(st.natW * st.scale) + 'x' + Math.round(st.natH * st.scale) + ' vs ' + st.vw + 'x' + st.vh);
 
+    // 此刻任务里还没有任何手势，可以安全断言"空闲状态"（dragging 的摘除是刻意放到下一帧的）
+    var durIdle = win.getComputedStyle(img).transitionDuration;
+    ok('空闲时有过渡（双击放大才会是平滑的）', durIdle !== '0s',
+       'transitionDuration=' + durIdle + ' | lb.className="' + lb.className + '"');
+
     // ---------- 锚点缩放 ----------
     var cx = 150, cy = 260;
     var before = Z.getState();
@@ -178,6 +183,21 @@ function run() {
     })(0);
 
     function continueRest() {
+    // ---------- 手势期间必须禁用过渡（否则每帧都被 .16s 动画补间 → 阶梯感）----------
+    fire(img, 'pointerdown', 61, 200, 350);
+    ok('按下后加上了 dragging 类', lb.classList.contains('dragging'));
+    ok('手势期间过渡被禁用', win.getComputedStyle(img).transitionDuration === '0s',
+       'transitionDuration=' + win.getComputedStyle(img).transitionDuration);
+    fire(img, 'pointerup', 61, 200, 350);
+    // 摘类发生在下一帧（刻意的：本轮手势最后一帧不该被补间），所以这里必须等一下再断言
+    setTimeout(function () {
+      var durAfter = win.getComputedStyle(img).transitionDuration;
+      ok('手势结束后（下一帧）恢复过渡', durAfter !== '0s',
+         'transitionDuration=' + durAfter + ' | lb.className="' + lb.className + '"');
+      tailTests();
+    }, 200);
+
+    function tailTests() {
     // ---------- 点图片不关闭 ----------
     fire(img, 'pointerdown', 31, 200, 350); fire(img, 'pointerup', 31, 200, 350);
     ok('单击图片本身不关闭（避免拖动误触）', Z.isOpen() === true);
@@ -189,6 +209,7 @@ function run() {
       ok('关闭后释放了图片引用', !img.getAttribute('src'));
       finish();
     }, 420);
+    }
     }
   }
 }

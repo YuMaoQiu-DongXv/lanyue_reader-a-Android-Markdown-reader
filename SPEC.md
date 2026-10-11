@@ -343,3 +343,30 @@ classes.dex 在包内 ✓
 真正的瓶颈是 GPU 纹理上限与 Android 单进程内存，而不是 CPU。
 
 **本轮 APK**：477 KB（dex 81,584 字节），零权限不变。
+
+---
+
+## 16. 第四轮真机反馈修复（导出与缩放）
+
+用户在真机上又报了 4 个问题。逐条根因与修复：
+
+| # | 现象 | 根因 | 修复 |
+|---|---|---|---|
+| 1 | 导出 PDF 没有页边距，正文顶满左右两侧 | `PrintAttributes.MinMargins` 被 **WebView 的打印适配器忽略**；我的打印 CSS 里也从来没写 `@page` | 打印样式加 `@page { size: A4; margin: 15mm 14mm; }`（这才是 WebView 打印真正认的边距声明）；原生侧 MinMargins 显式给 0，避免某些机型把两套边距叠加 |
+| 2 | 长图导出只有开头一段有内容，之后全白 | **单位换算 bug**：`Exporter` 内部一律用物理像素（`web.getHeight()` 等），但 `Layout.scrollTo(cssY)` 又乘了一次 `density` → 每步滚动超调约 3 倍（1080p 设备），第一格 y=0 正确、之后全在屏幕外 | 把接口单位写进方法名：`contentHeightCss/viewportHeightCss/scrollYCss/scrollToPhys`；所有调用点按显式单位换算；导出日志补一条"单位自证"（CSS 值与物理值、scale 一起打印），复测时可直接核对 |
+| 3 | 从导出界面（打印/图片导出）返回后，文档导航栏消失 | 导出期间 JS 给 `<html>` 加 `.exporting` 把固定顶栏隐藏（否则逐屏抓图会把顶栏拼进每一片），但**原生侧从来没有调用过 `LanyueApp.exportFinished()`** → 这个类永远留着，顶栏被 CSS 永久隐藏 | 原生三处调用：图片导出回调、`onResume()`（覆盖"从系统打印界面返回"这条路径）；JS 侧再加 `visibilitychange` 兜底（且只在没有在途图片导出时才摘类） |
+| 4 | 图片放大是"一段一段"的阶梯感，不像知乎那样丝滑 | `.lightbox.dragging img { transition: none }` 这条规则**只写了 CSS，JS 从未加过 `dragging` 类** → 每帧的 `transform` 都被 `.16s` 的过渡追着补间，手感就是阶梯 | 手势按下时 `beginGesture()` 加类、抬手后 `endGesture()` 在**下一帧**摘类（本轮手势的最后一帧不该被补间）；再用 60ms 定时器兜底，防止 rAF 不触发时类被永久留下 |
+
+**顺带修的一处隐患**：`endGesture()` 原先只依赖 `requestAnimationFrame`，在"没有帧产出"的环境里（页面不可见、部分无头渲染）不会触发，`dragging` 类会永远留着、过渡再也回不来 —— 这与第 3 条是同一类错误（**一个状态类没有兜底清除路径**），所以统一改成"主路径 + 定时器兜底"。
+
+### 本轮新增的机械验证
+
+- **`tools/rendertest/export.html`（新增，10 条断言）**：从 CSSOM 里读出 `@media print` 下的 `@page` 规则并断言其边距非零、尺寸为 A4；
+  断言整份 CSS 里不存在 `attr(href)` 打印规则（上一轮的网址洪流不会复发）；
+  断言 `.exporting` 能让顶栏 `display:none`、且 **`LanyueApp.exportFinished()` 能把它恢复**（直接测原生调用的那个 API）。
+- **`tools/rendertest/zoom.html` 扩到 32 条**：新增"空闲时有过渡 / 手势期间过渡被禁用 / 抬手后下一帧恢复过渡"。
+  这条在写测试时还额外暴露了一个测试自身的时序错误（断言与手势在同一任务内同步执行，而摘类是刻意延后一帧的）——
+  顺手改成"空闲断言提前、恢复断言等一帧"，避免以后误报。
+- 回归：渲染流水线 **77/77**、五宽度布局、首页几何 全部通过。
+
+**本轮 APK**：481 KB（492,807 字节），零权限不变。

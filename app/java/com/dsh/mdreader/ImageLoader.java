@@ -34,6 +34,9 @@ public final class ImageLoader {
     private static final int ZOOM_MAX_EDGE = 2560;
     /** 查看档的像素预算（约 6MP）——超过就继续降采样 */
     private static final long ZOOM_MAX_PIXELS = 6L * 1000 * 1000;
+    /** 导出档上限：A4@300dpi 只需约 2480px，再大纯属浪费，而逐张解码 25MB 原图会把打印过程拖爆 */
+    private static final int EXPORT_MAX_EDGE = 4096;
+    private static final long EXPORT_MAX_PIXELS = 12L * 1000 * 1000;
 
     private final Context ctx;
     private final FileGate files;
@@ -69,7 +72,7 @@ public final class ImageLoader {
 
     /** 各档的目标长边；0 表示不限（导出档）。 */
     private int targetEdge(int tier) {
-        if (tier == TIER_EXPORT) return 0;
+        if (tier == TIER_EXPORT) return EXPORT_MAX_EDGE;
         int displayEdge = Math.max(480, (int) (screenW * 1.5f));
         if (tier == TIER_DISPLAY) return displayEdge;
         // 查看档：给一点余量（<=ZOOM_MAX_EDGE），但不超过屏幕的 3 倍
@@ -97,8 +100,8 @@ public final class ImageLoader {
                 int longEdge = Math.max(bounds.outWidth, bounds.outHeight);
                 while (longEdge / (sample * 2) >= target) sample *= 2;
                 // 再按像素预算兜一层：有些图长边不大但像素极多
-                while ((long)(bounds.outWidth / sample) * (bounds.outHeight / sample) > ZOOM_MAX_PIXELS
-                        && tier != TIER_EXPORT) {
+                long budget = (tier == TIER_EXPORT) ? EXPORT_MAX_PIXELS : ZOOM_MAX_PIXELS;
+                while ((long)(bounds.outWidth / sample) * (bounds.outHeight / sample) > budget) {
                     int next = sample * 2;
                     if (longEdge / next < 512) break;      // 别把图降得看不清
                     sample = next;
