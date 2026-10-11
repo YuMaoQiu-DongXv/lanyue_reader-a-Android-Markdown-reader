@@ -49,7 +49,7 @@ import java.nio.charset.Charset;
  *   - 编辑      = 原生 EditText + 格式工具栏（覆盖层）
  * 原生侧只做 WebView 喂不进去的事：文件读写、编码转换、图片解码、导出、Insets。
  */
-public final class MainActivity extends Activity implements AssetServer.DocSource, Exporter.Host {
+public final class MainActivity extends Activity implements AssetServer.DocSource {
 
     private static final String TAG = "Lanyue";
 
@@ -62,9 +62,6 @@ public final class MainActivity extends Activity implements AssetServer.DocSourc
     private String encodingNotice = "";
 
     /* 布局上报（JS 用 CSS 像素上报，导出时需要物理像素换算） */
-    private int cssContentHeight = 1;
-    private int cssViewportHeight = 1;
-    private int cssScrollY = 0;
 
     /* 视图 */
     private FrameLayout root;
@@ -84,9 +81,6 @@ public final class MainActivity extends Activity implements AssetServer.DocSourc
     private Exporter exporter;
 
     private View fatalView;
-    private View exportOverlay;
-    private TextView exportOverlayText;
-    private String exportOverlayTitle = "正在导出…";
     private boolean editorVisible = false;
     private boolean editorDirty = false;
     private String editorOriginal = "";
@@ -105,7 +99,7 @@ public final class MainActivity extends Activity implements AssetServer.DocSourc
         assets = new AssetServer(this, this, images);
 
         web = createWebView();
-        exporter = new Exporter(this, web, settings, this, assets);
+        exporter = new Exporter(this, web, settings, assets);
 
         root = new FrameLayout(this);
         root.setBackgroundColor(color(R.color.bg));
@@ -774,8 +768,8 @@ public final class MainActivity extends Activity implements AssetServer.DocSourc
         exporter.exportPdf(hq, exportCallback);
     }
 
-    void doExportImages(String mode, String payload) {
-        exporter.exportImages(mode, payload, exportCallback);
+    void doExportScreen() {
+        exporter.exportScreen(exportCallback);
     }
 
     void doShareLast() {
@@ -816,12 +810,6 @@ public final class MainActivity extends Activity implements AssetServer.DocSourc
         toast(msg);
     }
 
-    void doLayout(int h, int vh, int y) {
-        cssContentHeight = Math.max(1, h);
-        cssViewportHeight = Math.max(1, vh);
-        cssScrollY = Math.max(0, y);
-    }
-
     void doDocReady(String statsJson) {
         Log.i(TAG, "docReady " + statsJson);
         showingDoc = true;
@@ -830,7 +818,6 @@ public final class MainActivity extends Activity implements AssetServer.DocSourc
     void doViewChanged(String view) {
         showingDoc = "doc".equals(view);
     }
-
 
     void doOpenUrl(String url) {
         openExternal(url);
@@ -890,89 +877,6 @@ public final class MainActivity extends Activity implements AssetServer.DocSourc
         } catch (Exception e) {
             return "1.0.0";
         }
-    }
-
-    /* ==================================================================
-       Exporter.Layout 实现
-       ================================================================== */
-
-    @Override
-    public int contentHeightCss() {
-        return cssContentHeight;
-    }
-
-    @Override
-    public int viewportHeightCss() {
-        return cssViewportHeight;
-    }
-
-    @Override
-    public int scrollYCss() {
-        return cssScrollY;
-    }
-
-    @Override
-    public void scrollToPhys(int physY) {
-        final int px = Math.max(0, physY);      // 入参已经是物理像素，不再乘 density
-        web.post(() -> web.scrollTo(0, px));
-    }
-
-    /**
-     * 导出期间盖一层不透明覆盖层。
-     * 长图必须逐屏滚动抓取，用户会看见页面不停滚动 —— 盖住它，只留进度。
-     */
-    @Override
-    public void showExportOverlay(String title) {
-        exportOverlayTitle = title;
-        runOnUiThread(() -> {
-            if (exportOverlay == null) {
-                LinearLayout col = new LinearLayout(this);
-                col.setOrientation(LinearLayout.VERTICAL);
-                col.setGravity(Gravity.CENTER);
-                col.setBackgroundColor(color(R.color.bg));
-                exportOverlayText = new TextView(this);
-                exportOverlayText.setTextSize(15);
-                exportOverlayText.setTextColor(color(R.color.text));
-                exportOverlayText.setGravity(Gravity.CENTER);
-                col.addView(exportOverlayText);
-                exportOverlay = col;
-            }
-            exportOverlayText.setText(exportOverlayTitle);
-            if (exportOverlay.getParent() == null) {
-                root.addView(exportOverlay, new FrameLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-            }
-            exportOverlay.bringToFront();
-        });
-    }
-
-    @Override
-    public void updateExportOverlay(int done, int total) {
-        runOnUiThread(() -> {
-            if (exportOverlayText != null) {
-                exportOverlayText.setText(exportOverlayTitle + " " + done + "/" + total);
-            }
-        });
-    }
-
-    @Override
-    public void hideExportOverlay() {
-        runOnUiThread(() -> {
-            if (exportOverlay != null && exportOverlay.getParent() != null) {
-                root.removeView(exportOverlay);
-            }
-        });
-    }
-
-    /**
-     * 导出期间切到软件渲染层。
-     * 这是整个长图方案的关键：软件路径下 {@code View.draw()} 是同步确定性的 ——
-     * 它拿到的就是"当前滚动位置上该有的内容"，不再和合成器赛跑
-     * （硬件加速下 draw() 拿的是已合成的帧，滚完常常还没合成，于是抓到空白）。
-     */
-    @Override
-    public void setSoftwareLayer(final boolean on) {
-        web.post(() -> web.setLayerType(on ? View.LAYER_TYPE_SOFTWARE : View.LAYER_TYPE_HARDWARE, null));
     }
 
     /* ==================================================================

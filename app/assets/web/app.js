@@ -54,7 +54,7 @@
     window.Lanyue = {
       getState: function () { return JSON.stringify(st); },
       openFile: noop, openFolder: noop, openRecent: noop, saveAs: noop,
-      saveText: noop, editDoc: noop, exportPdf: noop, exportImages: noop,
+      saveText: noop, editDoc: noop, exportPdf: noop, exportScreen: noop,
       shareLast: noop, setSetting: noop, toast: noop,
       log: function (m) { console.log('[lanyue]', m); },
       docReady: function (s) { console.log('[lanyue] docReady', s); },
@@ -71,7 +71,6 @@
   var toastTimer = 0;          // 提示自动收起的定时器（曾经漏了声明，严格模式下抛错 → 提示永不消失）
   var currentView = 'home';
   var exportingSince = 0;         // 进入"导出态"的时间戳（顶栏此时被 CSS 隐藏）
-  var imageExportInFlight = false;      // 'home' | 'doc'：顶栏据此决定显示返回箭头还是应用名
   var sourceText = '';
   var pipelineResult = null;
   var chunks = [], renderedChunks = 0, chunkSentinels = [];
@@ -323,7 +322,6 @@
         if (hs[hi].textContent.indexOf(want) >= 0) { hs[hi].scrollIntoView({ block: 'start' }); break; }
       }
     }
-    updateLayout();
     currentView = 'doc';
     try { B.viewChanged('doc'); } catch (e) {}
     var stats = {
@@ -500,7 +498,6 @@
     showPct(pct);
     var now = Date.now();
     if (now - lastSave > 600) { lastSave = now; savePosition(); }
-    updateLayout();
   }
   function showPct(pct) {
     var el = $('pct');
@@ -510,12 +507,6 @@
     clearTimeout(pctTimer);
     pctTimer = setTimeout(function () { el.classList.remove('show'); }, 1400);
   }
-  function updateLayout() {
-    try {
-      B.layout(document.documentElement.scrollHeight, window.innerHeight, window.scrollY);
-    } catch (e) {}
-  }
-
   /* ---------------- 面板开关 ---------------- */
   function openPanel(el) {
     closePanels();
@@ -541,11 +532,9 @@
     html += row('action', '另存为…', '导出为新的 .md 文件', 'act-saveas');
     html += '<div class="gl">导出</div>';
     html += row('action', '导出 PDF', '走系统打印链路，可选择纸张与边距', 'act-pdf');
-    html += row('action', '导出长图（自动分片）', '每片不超过 12000px，适合分享', 'act-img-pages');
-    html += row('action', '导出当前屏', '只截取当前可见区域', 'act-img-view');
-    html += row('action', '导出选区', '先在正文中选择内容，再点这里', 'act-img-sel');
+    html += row('action', '导出当前屏', '把当前可见区域存成图片', 'act-img-view');
     html += row('action', '分享上次导出', lastExportPayload ? '最近：' + lastExportPayload : '还没有导出记录', 'act-share');
-    html += row('switch', '高质量图片导出', '图片按原图进 PDF/长图（更慢更大）', 'set-hq', !!s.hqExport);
+    html += row('switch', '高质量图片导出', '图片按原图进 PDF（更慢更大）', 'set-hq', !!s.hqExport);
     html += '<div class="gl">阅读</div>';
     html += row('seg', '主题', '', 'set-theme');
     html += row('step', '字号', '', 'set-font');
@@ -647,43 +636,22 @@
     closePanels();
     B.toast('正在准备 PDF…');
     prepareForExport().then(function () {
-      updateLayout();
       B.exportPdf(!!(state.settings && state.settings.hqExport));
     });
   }
 
-  function exportImages(mode) {
+  /* 当前屏导出：屏幕上这一帧已经渲染好了，原生侧同步绘制即可，不滚动、不等时序。
+     长图导出（滚屏抓取拼接）已整体移除 —— WebView 硬件加速下 draw() 拿到的是"已合成的帧"，
+     与异步滚动赛跑必然抓空；替代方案（用打印链路排版成超长 PDF）又受限于框架不允许应用驱动打印流程
+     （PrintDocumentAdapter 的回调构造函数是包内可见的）。整篇留档请用「导出 PDF」。 */
+  function exportScreen() {
     closePanels();
-    // 几何一律现场测量后上报（CSS px）：原生侧据此设"一页无限长"的 PDF 尺寸
-    var payload = {
-      mode: mode,
-      bandHeight: 12000,
-      viewportW: Math.round(window.innerWidth),
-      contentH: Math.round(document.documentElement.scrollHeight),
-      scrollY: Math.round(window.scrollY)
-    };
-    if (mode === 'selection') {
-      var sel = window.getSelection();
-      if (!sel || sel.isCollapsed || !sel.rangeCount) { B.toast('请先在正文中选择要导出的内容'); return; }
-      var range = sel.getRangeAt(0);
-      if (doc.contains(range.commonAncestorContainer) === false && !doc.contains(range.startContainer)) {
-        B.toast('请选择正文中的内容'); return;
-      }
-      var rects = range.getClientRects();
-      var top = Infinity, bottom = -Infinity;
-      for (var i = 0; i < rects.length; i++) {
-        top = Math.min(top, rects[i].top); bottom = Math.max(bottom, rects[i].bottom);
-      }
-      if (!isFinite(top) || !isFinite(bottom)) { B.toast('无法获取选区位置'); return; }
-      payload.top = Math.round(top + window.scrollY);
-      payload.bottom = Math.round(bottom + window.scrollY);
-      sel.removeAllRanges();
-    }
-    imageExportInFlight = true;      // 图片导出可能持续十几秒，兜底逻辑要避开它
-    B.toast(mode === 'viewport' ? '正在导出当前屏…' : '正在导出长图…');
+    B.toast('正在导出当前屏…');
     prepareForExport().then(function () {
-      updateLayout();
-      B.exportImages(mode, JSON.stringify(payload));
+      // 等两帧：顶栏刚被隐藏，布局落定后才是要拍的样子
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { B.exportScreen(); });
+      });
     });
   }
 
@@ -754,7 +722,6 @@
     $('doc-title').addEventListener('dblclick', function () { window.scrollTo({ top: 0, behavior: 'smooth' }); });
 
     window.addEventListener('scroll', onScroll, { passive: true });
-    window.addEventListener('resize', function () { updateLayout(); }, { passive: true });
     document.addEventListener('visibilitychange', function () { if (document.hidden) savePosition(); });
     window.addEventListener('beforeunload', savePosition);
 
@@ -1105,7 +1072,6 @@
     toast: function (msg) { toast(msg); },
     notify: function (kind, ok, msg) {
       toast(msg);
-      if (kind === 'export') imageExportInFlight = false;
       if (ok && (kind === 'pdf' || kind === 'image')) lastExportPayload = msg;
     },
     /** 返回键：先关灯箱、再关面板；返回 true 表示"我处理掉了" */
@@ -1152,9 +1118,7 @@
     if (k === 'act-edit') { closePanels(); B.editDoc(sourceText); }
     else if (k === 'act-saveas') { closePanels(); B.saveAs(state.fileName || 'untitled.md', sourceText); }
     else if (k === 'act-pdf') exportPdf();
-    else if (k === 'act-img-pages') exportImages('pages');
-    else if (k === 'act-img-view') exportImages('viewport');
-    else if (k === 'act-img-sel') exportImages('selection');
+    else if (k === 'act-img-view') exportScreen();
     else if (k === 'act-share') { closePanels(); B.shareLast(); }
     else if (k === 'act-close') closePanels();
   });
@@ -1169,8 +1133,7 @@
       clearTimeout(toastTimer);
       toastTimer = setTimeout(function () { tel.classList.remove('show'); }, 1200);
     }
-    if (exportingSince && !imageExportInFlight &&
-        document.documentElement.classList.contains('exporting')) {
+    if (exportingSince && document.documentElement.classList.contains('exporting')) {
       document.documentElement.classList.remove('exporting');
       exportingSince = 0;
     }

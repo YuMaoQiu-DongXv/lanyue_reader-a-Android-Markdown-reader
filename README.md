@@ -12,7 +12,7 @@
 ![许可](https://img.shields.io/badge/license-MIT-blue)
 
 **481 KB。零权限。零网络。** 该有的却一样不少：数学公式、代码高亮、表格、图片、目录、搜索、
-阅读位置记忆、轻量编辑、导出 PDF 与长图。
+阅读位置记忆、轻量编辑、导出 PDF 与当前屏图片。
 
 它有多大？——**差不多是你手机里随手一张截图的五分之一**。
 
@@ -41,7 +41,8 @@
   点开可双指缩放、拖动、双击放大。
 - **阅读体验**：目录抽屉、全文搜索跳转、字号调节、阅读位置记忆、浅色/深色/跟随系统三态。
 - **编辑**：原生编辑器 + 一排 Markdown 格式按钮，自动保存、退出保存提示、只读文件自动转"另存为"。
-- **导出**：PDF（走系统打印，A4 可调边距）、长图（自动分片，避免一张 290 MB 的位图）、当前屏、选定区域，都能分享。
+- **导出**：PDF（走系统打印，A4 可调边距）与当前屏图片，都能直接分享。
+  > 「长图导出」曾经实现过，但已整体移除：WebView 在硬件加速下 `draw()` 拿到的是**已合成的那一帧**，与异步滚动赛跑必然抓空；替代方案（用打印链路把整篇排版成超长 PDF）又受限于框架不允许应用驱动打印流程。整篇留档请用「导出 PDF」。详见 [`SPEC.md`](SPEC.md) §18。
 - **编码兜底**：UTF-8 / UTF-16 / GB18030 自动识别，保存统一写 UTF-8。
 
 ## 安装
@@ -109,11 +110,6 @@ Linux/macOS 下把路径指对、去掉脚本里的 `.exe` 后缀即可。
    首页"最近打开"的排版事故就是这么来的。
 6. **超大图会让 GPU 分块光栅掉链子**：给 WebView 喂 4K 原图，放大后图层宽度上万像素、远超纹理上限，
    表现是"矩形缺失 + 一卡一卡"。解法是限制查看档分辨率 + 按纹理预算收敛缩放上限 + `translate3d` 提升合成层。
-7. **长图导出不能靠"抓硬件合成的帧"**：`View.draw()` 在硬件加速的 WebView 上拿到的是已合成的那一帧，
-   而滚动是异步的 —— 抓早了就是整片空白。正解是导出期间把 WebView 切成 `LAYER_TYPE_SOFTWARE`：
-   软件路径下 `draw()` 同步确定性，拿到的就是"当前滚动位置上该有的内容"。
-   （另一条更省事的路 —— 用打印适配器把整篇排版成一页超长 PDF 再栅格化 —— 在 API 层面走不通：
-   `PrintDocumentAdapter` 的回调构造函数是包内可见的，框架不允许应用手动驱动打印流程。）
 
 ## 验证状态
 
@@ -153,7 +149,7 @@ app/
     ImageLoader.java           图片分档降采样（显示/查看/导出）+ LRU
     FileGate.java              SAF 打开/另存/目录授权/相对图片解析
     CodecGate.java             UTF-8 / UTF-16 / GB18030 探测
-    Exporter.java              PDF(PrintManager) / 分片长图 / 选区 / 分享
+    Exporter.java              PDF(PrintManager) / 当前屏截图 / 分享
     ShareProvider.java         极简 ContentProvider（只暴露 cacheDir/share）
     Settings.java              SharedPreferences
   assets/web/                  HTML/CSS/JS 渲染层（含 vendor：marked/KaTeX/mhchem/Prism）

@@ -69,8 +69,8 @@ public final class AppBridge {
     }
 
     @JavascriptInterface
-    public void exportImages(String mode, String payloadJson) {
-        ui(() -> activity.doExportImages(mode, payloadJson));
+    public void exportScreen() {
+        ui(activity::doExportScreen);
     }
 
     @JavascriptInterface
@@ -108,13 +108,7 @@ public final class AppBridge {
     }
 
     @JavascriptInterface
-    public void layout(int contentHeight, int viewportHeight, int scrollY) {
-        activity.doLayout(contentHeight, viewportHeight, scrollY);
-    }
-
-    @JavascriptInterface
     public void viewChanged(String view) {
         activity.doViewChanged(view);
     }
-
 }

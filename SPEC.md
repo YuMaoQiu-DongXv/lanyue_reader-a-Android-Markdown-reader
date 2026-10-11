@@ -404,48 +404,40 @@ LanyueExport: chunk 1/14 lanyue-...-001.png bytes=2843117
 
 ---
 
-## 18. 第六轮：长图导出机制更换（软件渲染层）
+## 18. 长图导出已移除
 
-### 18.1 旧机制为什么必须废弃
+**结论：这个功能整体删除，只保留「导出 PDF」与「导出当前屏」。**
 
-"滚动一屏 → `web.draw()` 抓一屏 → 拼接"有两个死结：
+第 13~17 节记录了为它做过的多轮修复（单位换算、滚动回执、空白重试、软件渲染层……），
+那些记录保留下来当作"为什么此路不通"的档案，但功能本身不再存在。删除理由：
 
-1. **抓不准**：`draw()` 对硬件加速的 WebView 拿到的是**已经合成好的那一帧**，而滚动是异步的
-   （Chromium 在合成线程上工作）。滚动之后能不能抓到新画面全看时序 —— 真机表现就是
-   "只有开头一段有内容、之后全白"。第五轮加的"滚动回执 + 空白重试"只是把**等待**做得更巧，
+1. **滚动抓取在 WebView 上不可靠**（第 16、17 节）：硬件加速下 `View.draw()` 拿到的是
+   *已经合成好的那一帧*，而滚动是异步的（Chromium 在合成线程干活）。抓早了就是整片空白 ——
+   真机表现正是"只有开头一段有内容、之后全白"。补"滚动回执 + 空白重试"只是把等待做得更巧，
    **机制没变**，所以复测仍是老样子。
-2. **观感差**：天然是 O(N) 次滚动 + 等待，慢，且屏幕上能看见页面在滚。
+2. **更优雅的一条路被平台堵死**：让 WebView 的 `PrintDocumentAdapter` 把整篇排版成"一页超长 PDF"
+   再栅格化，本可以一趟排版、完全不滚动。但
+   `PrintDocumentAdapter.LayoutResultCallback` / `WriteResultCallback` 的构造函数是**包内可见**的
+   （javac 实测：`is not public in LayoutResultCallback; cannot be accessed from outside package`），
+   框架刻意不允许应用手动驱动打印流程；网上"WebView 直接存 PDF"的做法都靠反射非公开成员（隐藏 API），
+   行为不受保证。
+3. **软件渲染层方案仍要 O(N) 次滚动**：能保证抓得准，但依旧慢、依旧需要遮挡层，
+   而收益（一张超长图）用「导出 PDF」就能覆盖。
+4. 其余路线也都不成立：OS 级滚动截图需无障碍/录屏权限（破坏"零权限"承诺）；
+   DevTools 协议需打开远程调试 + 手写 WebSocket 客户端；离屏超大 WebView 一次性 draw 超 GPU 纹理上限。
 
-### 18.2 研究过的四条路线
+### 移除后的实际改动
 
-| 路线 | 代表 | 结论 |
-|---|---|---|
-| **打印链路 → 一页超长 PDF → PdfRenderer 分带栅格化** | [Print Android WebView on "endless" PDF](https://stackoverflow.com/questions/71479254)、[WebView 存 PDF 的 gist](https://gist.github.com/brettwold/838c092329c486b6112c8ebe94c8007e) | ❌ **API 层面走不通**：`PrintDocumentAdapter.LayoutResultCallback` / `WriteResultCallback` 的构造函数是**包内可见**的（javac 实测：`is not public in LayoutResultCallback; cannot be accessed from outside package`）。那些 gist 靠反射非公开成员，属隐藏 API。不弹系统打印界面就拿不到 PDF |
-| OS 级滚动截图（AccessibilityService 注入滑动 + 拼帧） | [android-scroll-capture](https://github.com/garregusev/android-scroll-capture) | ❌ 需要录屏/无障碍权限，违反"零权限"承诺；且同为拼帧流派 |
-| DevTools 协议 `Page.captureScreenshot`（`captureBeyondViewport`） | chrome-remote-interface 系 | ⚠️ 能一次拿到整页位图，但必须 `setWebContentsDebuggingEnabled(true)`（release 打开远程调试是安全隐患）+ 手写 WebSocket 客户端，为 485 KB 的包塞这些不划算 |
-| 离屏超大 WebView 一次性 draw | — | ❌ 1080×56000 的图层远超 GPU 纹理上限，会回到"残块"老问题 |
+- `Exporter` 从 571 行降到 **282 行**：删掉 `Layout` 接口、滚动抓取（captureRange/captureTile/
+  doCaptureTile/blankRatio）、滚动回执握手（armScrollAck/scrollSettled/ackScroll）、分片与内存收敛、
+  触摸锁定、覆盖层与渲染层切换；保留 `exportPdf` / `exportScreen` / `shareLast` 与落盘逻辑。
+- 桥接口：`exportImages(mode, payload)` → `exportScreen()`；删除 `layout(...)` 与 `scrollSettled(...)`。
+- 前端：删除 `updateLayout()`（几何上报）、`exportImages()`、选区导出、面板里的两项；
+  导出面板现在只有 **导出 PDF / 导出当前屏 / 分享上次导出**。
+- 「导出当前屏」不需要滚动：屏幕上的这一帧已经渲染好，**直接同步绘制**即可 —— 没有时序问题，
+  也不需要额外权限。
 
-### 18.3 最终采用：软件渲染层 + 全屏遮挡 + 同步绘制
+### 唯一被保留的能力取舍
 
-| 步骤 | 做法 | 解决了什么 |
-|---|---|---|
-| ① 切渲染层 | 导出期间 `web.setLayerType(LAYER_TYPE_SOFTWARE)` | **软件路径下 `draw()` 是同步确定性的** —— 拿到的就是"当前滚动位置上该有的内容"，不再和合成器赛跑。这是与旧实现唯一、也是最关键的区别 |
-| ② 遮挡 | 盖一层不透明原生覆盖层，显示"正在导出长图 N/M" | 用户看不到页面在滚，"观感差"消失 |
-| ③ 逐屏 | 滚动 → `postOnAnimation` 两帧 → 同步 draw → 贴进分片位图 | 不再需要"猜多久画面才出来" |
-| ④ 兜底 | 整屏同色则重试至多两次（软件路径下这种情况已很少见） | 万一仍有个别帧没画出来，自愈 |
-| ⑤ 收尾 | 恢复硬件层、恢复滚动位置、移除覆盖层（成功后或失败后都走同一条收尾路径） | 不留残余状态（上一轮"顶栏消失/类没摘掉"的教训） |
-
-覆盖层与抓图不冲突的原因：`web.draw()` 是**显式**把 WebView 画到我们给的 Canvas 上，
-与它是否被同窗口的兄弟 View 遮住无关 —— 这正好让"遮挡"和"抓图"可以同时成立。
-
-### 18.4 自证日志
-
-```
-LanyueExport: long-image start mode=pages chunks=14 chunkH=12000 content=168000px
-              vp=2400px region=0..168000 | contentCss=56000 vpCss=800 viewportWcss=360 scale=3.000
-LanyueExport: tile 0.0 req=0 actual=0 blank=0.412
-LanyueExport: saved lanyue-20261011-xxxxxx-001.png 1080x12000
-```
-
-判读：`scale` 应等于屏幕密度；`blank` 接近 1.000 且带 `retry` 说明该屏确实没画出来；
-`chunks` 与 `content/vp` 应对得上。
+需要整篇留档时用 **PDF 导出**（系统打印 → 另存为 PDF）。那条链路是权威的：排版可重排、
+分页由 Chromium 负责、边距由 CSS `@page` 控制（第 16 节），并且支持"高质量图片"开关。

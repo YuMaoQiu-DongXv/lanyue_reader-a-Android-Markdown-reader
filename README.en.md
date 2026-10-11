@@ -13,7 +13,7 @@
 
 **481 KB. Zero permissions. Zero network.** And yet it has everything that matters:
 math rendering, syntax highlighting, tables, images, table of contents, search, reading-position memory,
-a lightweight editor, and PDF / long-image export.
+a lightweight editor, and PDF / current-screen image export.
 
 How small is that? — **about one fifth of a random screenshot sitting in your phone.**
 
@@ -46,8 +46,13 @@ Let's get this out of the way first, so you don't install it for nothing:
   light / dark / follow-system themes.
 - **Editing**: a native editor with a Markdown toolbar, autosave, unsaved-change prompts, and automatic
   "Save as" when the file is read-only.
-- **Export**: PDF (via system print, A4 with adjustable margins), long image (auto-chunked to avoid a
-  290 MB single bitmap), current viewport, or a selection — all shareable.
+- **Export**: PDF (via system print, A4 with adjustable margins) and the current screen as an image,
+  both directly shareable.
+  > The "long image" export existed and has been removed: with hardware acceleration, `WebView.draw()`
+  captures a frame that is already composited, so racing it against asynchronous scrolling inevitably
+  grabs blank slices; the cleaner alternative (print the whole document into one very tall PDF) is
+  blocked because the framework does not let apps drive its print callbacks. Use **Export PDF** for a
+  full archive. See [`SPEC.md`](SPEC.md) §18.
 - **Encoding**: UTF-8 / UTF-16 / GB18030 auto-detection; always saved back as UTF-8.
 
 ## Install
@@ -166,7 +171,7 @@ app/
     ImageLoader.java           tiered downsampling (display / zoom / export) + LRU cache
     FileGate.java              SAF open / save-as / folder authorization / relative image resolution
     CodecGate.java             UTF-8 / UTF-16 / GB18030 detection
-    Exporter.java              PDF (PrintManager) / chunked long image / viewport / selection / share
+    Exporter.java              PDF (PrintManager) / current-screen capture / share
     ShareProvider.java         minimal ContentProvider (exposes cacheDir/share only)
     Settings.java              SharedPreferences
   assets/web/                  HTML/CSS/JS rendering layer + vendor(marked/KaTeX/mhchem/Prism)

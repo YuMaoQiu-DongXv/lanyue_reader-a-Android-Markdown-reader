@@ -609,7 +609,6 @@ html.exporting body { padding-top: 0 !important; }
   .md a { color: #000; text-decoration: none; }
   /* 曾经这里给每个 http 链接补印 " (url)"。对含几十个链接的文档（样本有 75 个）会糊满整页网址，
      且把正常排版冲垮 —— 已删除。链接在 PDF 里就按普通文字排版。 */
-
   .md h1, .md h2 { border-bottom-color: #ccc; }
   .md pre, .md table, .md blockquote, .md .katex-display, .md img, .md .code-block, .fm-card {
     break-inside: avoid; page-break-inside: avoid;
