@@ -6,19 +6,19 @@
 > 或者被那些动辄上百 MB、打开先弹会员、读到一半插广告的"阅读器"搞得心力交瘁？
 > **蓝阅就是为了终结这些破事而生的。**
 
-![APK](https://img.shields.io/badge/APK-481%20KB-blue)
+![APK](https://img.shields.io/badge/APK-477%20KB-blue)
 ![权限](https://img.shields.io/badge/%E6%9D%83%E9%99%90-%E6%97%A0-brightgreen)
 ![Android](https://img.shields.io/badge/Android-8.0%2B-3ddc84)
 ![许可](https://img.shields.io/badge/license-MIT-blue)
 
-**481 KB。零权限。零网络。** 该有的却一样不少：数学公式、代码高亮、表格、图片、目录、搜索、
+**477 KB。零权限。零网络。** 该有的却一样不少：数学公式、代码高亮、表格、图片、目录、搜索、
 阅读位置记忆、轻量编辑、导出 PDF 与当前屏图片。
 
 它有多大？——**差不多是你手机里随手一张截图的五分之一**。
 
 | | 体积 |
 |---|---|
-| 蓝阅 | **481 KB** |
+| 蓝阅 | **477 KB** |
 | 随手一张手机截图 | 1 ~ 3 MB（比它大 2~6 倍） |
 | 常见的"全能阅读器" | 30 ~ 120 MB（比它大 60~250 倍） |
 
