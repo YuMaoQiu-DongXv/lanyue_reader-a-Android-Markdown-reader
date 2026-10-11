@@ -41,7 +41,10 @@ public final class Exporter {
 
     private static final String TAG = "LanyueExport";
     private static final int REQ_CHUNK_PX = 12000;      // 用户批准的每片上限（输出像素）
-    private static final int SETTLE_MS = 130;           // 滚动后等待渲染稳定的时间
+    private static final int ACK_EXTRA_MS = 40;         // 收到滚动回执后再等一小会儿，让画面落地
+    private static final int ACK_TIMEOUT_MS = 700;      // 回执兜底时限（页面没回也要继续，别卡死）
+    private static final float BLANK_RATIO = 0.9985f;   // 「整屏同色」判定阈值（识别未合成的空白帧）
+    private static final int BLANK_RETRY = 2;           // 疑似空白帧的重试次数
 
     public interface Callback {
         /** shareUri 非空表示可直接分享（cacheDir/share 下的文件） */
@@ -79,6 +82,10 @@ public final class Exporter {
     private final List<Uri> lastExported = new ArrayList<Uri>();
     private boolean busy = false;
     private int savedScrollYcss = 0;
+    private int contentPhysPx = 0;              // 正文总高（物理像素），startCapture 里写入
+    private volatile boolean capturePending = false;
+    private Runnable captureAction;
+    private volatile int lastAckCssY = Integer.MIN_VALUE;
     private Callback printCb;
     private Runnable hqReset;
 
@@ -241,6 +248,7 @@ public final class Exporter {
         }
         // 这条日志自带"单位自证"：真机复测长图导出时用它核对换算是否正确
         // （vpCss/内容高是 CSS px；content/vp/chunkH 是物理 px；scale 应约等于屏幕密度）
+        contentPhysPx = contentPhys;
         Log.i(TAG, "capture ranges=" + ranges.size() + " chunkH=" + chunkH + "px"
                 + " content=" + contentPhys + "px vp=" + vpH + "px"
                 + " | vpCss=" + layout.viewportHeightCss() + " contentCss=" + layout.contentHeightCss()
@@ -261,15 +269,23 @@ public final class Exporter {
         final int rangeH = r[1] - r[0];
         final Bitmap chunk = Bitmap.createBitmap(w, rangeH, Bitmap.Config.ARGB_8888);
         final Canvas c = new Canvas(chunk);
-        captureTile(mode, w, vpH, ranges, rangeIndex, tileIndex, out, truncatedCount, chunk, c, r[0], rangeH, cb);
+        captureTile(mode, w, vpH, ranges, rangeIndex, tileIndex, out, truncatedCount,
+                chunk, c, r[0], rangeH, cb, 0);
     }
 
+    /**
+     * 抓一屏。
+     *
+     * 时序不靠固定延时，而是「布防 → 滚动 → 页面回执（滚动后两帧）→ 再抓」：
+     * Chromium 的合成是异步的，只按固定延时抓，很容易抓到还没重新合成的空白帧
+     * （真机 bug「长图只有第一格有内容、之后全白」的成因之一）。
+     */
     private void captureTile(final String mode, final int w, final int vpH, final List<int[]> ranges,
                              final int rangeIndex, final int tileIndex, final List<Uri> out,
                              final int truncatedCount, final Bitmap chunk, final Canvas canvas,
-                             final int rangeTop, final int rangeH, final Callback cb) {
+                             final int rangeTop, final int rangeH, final Callback cb, final int attempt) {
         final int[] r = ranges.get(rangeIndex);
-        int y = rangeTop + tileIndex * vpH;
+        final int y = rangeTop + tileIndex * vpH;
         if (y >= r[1]) {
             // 本片抓完：写盘
             saveChunk(mode, chunk, rangeIndex, ranges.size(), new ChunkSaver() {
@@ -283,27 +299,117 @@ public final class Exporter {
             });
             return;
         }
-        layout.scrollToPhys(y);      // y 是物理像素（见 Layout 的注释）
+        // 滚到底部时 WebView 会钳制在最大滚动位置：这时改用「重叠贴图」，
+        // 按实际位置把这一屏画进片里，避免最后一片重复最后一屏、或者抓成空白。
+        final int maxScroll = Math.max(0, contentPhysPx - vpH);
+        final int target = clamp(y, 0, maxScroll);
+        final int dstOffset = Math.max(0, target - rangeTop);
+        final int drawH = Math.min(vpH, Math.max(0, rangeH - dstOffset));
+        final float scale = (float) vpH / (float) Math.max(1, layout.viewportHeightCss());
+        final int targetCss = Math.round(target / Math.max(0.01f, scale));
+
+        capturePending = true;
+        captureAction = new Runnable() {
+            @Override
+            public void run() {
+                ui.postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                        doCaptureTile(mode, w, vpH, ranges, rangeIndex, tileIndex, out, truncatedCount,
+                                chunk, canvas, rangeTop, rangeH, cb, attempt, y, target, dstOffset, drawH);
+                    }
+                }, ACK_EXTRA_MS);
+            }
+        };
+        // 先布防回执再滚动（顺序不能反：布防时若已经就在目标位置，页面会立刻回执）
+        web.evaluateJavascript("(function(){try{return LanyueApp.armScrollAck(" + targetCss
+                + ");}catch(e){return 0;}})()", null);
+        layout.scrollToPhys(target);
         ui.postDelayed(new Runnable() {
             @Override
             public void run() {
-                try {
-                    Bitmap tile = Bitmap.createBitmap(w, vpH, Bitmap.Config.ARGB_8888);
-                    web.draw(new Canvas(tile));
-                    int dy = tileIndex * vpH;                        // 本屏在这一片里的纵向偏移
-                    int drawH = Math.min(vpH, Math.max(0, rangeH - dy));
-                    if (drawH > 0) {
-                        android.graphics.Rect src = new android.graphics.Rect(0, 0, w, drawH);
-                        android.graphics.Rect dst = new android.graphics.Rect(0, dy, w, dy + drawH);
-                        canvas.drawBitmap(tile, src, dst, null);
-                    }
-                    tile.recycle();
-                } catch (Throwable t) {
-                    Log.w(TAG, "tile capture failed", t);
+                if (capturePending) {
+                    Log.w(TAG, "滚动回执超时，仍然继续抓图 y=" + target);
+                    fireCapture();
                 }
-                captureTile(mode, w, vpH, ranges, rangeIndex, tileIndex + 1, out, truncatedCount, chunk, canvas, rangeTop, rangeH, cb);
             }
-        }, SETTLE_MS);
+        }, ACK_TIMEOUT_MS);
+    }
+
+    /** 页面滚动回执（由 AppBridge 转发）：与超时兜底只认先到的那个 */
+    public void onScrollSettled(int cssY) {
+        lastAckCssY = cssY;
+        if (busy && capturePending) fireCapture();
+    }
+
+    private void fireCapture() {
+        if (!capturePending) return;
+        capturePending = false;
+        Runnable a = captureAction;
+        captureAction = null;
+        if (a != null) a.run();
+    }
+
+    private void doCaptureTile(final String mode, final int w, final int vpH, final List<int[]> ranges,
+                               final int rangeIndex, final int tileIndex, final List<Uri> out,
+                               final int truncatedCount, final Bitmap chunk, final Canvas canvas,
+                               final int rangeTop, final int rangeH, final Callback cb, final int attempt,
+                               final int requestedY, final int target, final int dstOffset, final int drawH) {
+        Bitmap tile = null;
+        try {
+            tile = Bitmap.createBitmap(w, vpH, Bitmap.Config.ARGB_8888);
+            web.draw(new Canvas(tile));
+            float blank = blankRatio(tile);
+            Log.i(TAG, "tile " + rangeIndex + "." + tileIndex + " req=" + requestedY + " actual=" + target
+                    + " ackCss=" + lastAckCssY + " blank="
+                    + String.format(java.util.Locale.US, "%.3f", blank)
+                    + (attempt > 0 ? " retry=" + attempt : ""));
+            if (blank >= BLANK_RATIO && attempt < BLANK_RETRY) {
+                // 整屏同色：大概率是滚动后画面还没产出。等久一点重抓；
+                // 重试后仍为同色就接受（那片可能确实是空白区域）。
+                tile.recycle();
+                tile = null;
+                ui.postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                        captureTile(mode, w, vpH, ranges, rangeIndex, tileIndex, out, truncatedCount,
+                                chunk, canvas, rangeTop, rangeH, cb, attempt + 1);
+                    }
+                }, 300L * (attempt + 1));
+                return;
+            }
+            if (drawH > 0) {
+                android.graphics.Rect src = new android.graphics.Rect(0, 0, w, drawH);
+                android.graphics.Rect dst = new android.graphics.Rect(0, dstOffset, w, dstOffset + drawH);
+                canvas.drawBitmap(tile, src, dst, null);
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "tile capture failed", t);
+        } finally {
+            if (tile != null) tile.recycle();
+        }
+        captureTile(mode, w, vpH, ranges, rangeIndex, tileIndex + 1, out, truncatedCount,
+                chunk, canvas, rangeTop, rangeH, cb, 0);
+    }
+
+    /** 采样统计「整屏同色」比例：用来识别「滚动后尚未重新合成」的空白帧 */
+    private static float blankRatio(Bitmap bmp) {
+        try {
+            int w = bmp.getWidth(), h = bmp.getHeight();
+            if (w <= 0 || h <= 0) return 1f;
+            int first = bmp.getPixel(0, 0);
+            int total = 0, same = 0;
+            int xStep = Math.max(1, w / 24), yStep = Math.max(1, h / 40);
+            for (int yy = 0; yy < h; yy += yStep) {
+                for (int xx = 0; xx < w; xx += xStep) {
+                    total++;
+                    if (bmp.getPixel(xx, yy) == first) same++;
+                }
+            }
+            return total == 0 ? 1f : (float) same / (float) total;
+        } catch (Throwable t) {
+            return 0f;      // 采样本身失败就当「有内容」，不要因此反复重试
+        }
     }
 
     private interface ChunkSaver {
@@ -330,6 +436,7 @@ public final class Exporter {
             os.close();
             os = null;
             lastExported.add(ShareProvider.uriFor(activity, f));
+            Log.i(TAG, "chunk " + (index + 1) + "/" + total + " " + name + " bytes=" + f.length());
             saver.onSaved(ShareProvider.uriFor(activity, f), 0);
         } catch (Throwable t) {
             Log.w(TAG, "save chunk failed", t);

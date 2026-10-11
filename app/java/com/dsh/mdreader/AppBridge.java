@@ -116,4 +116,10 @@ public final class AppBridge {
     public void viewChanged(String view) {
         activity.doViewChanged(view);
     }
+
+    /** 滚动回执：页面已在目标位置产出画面（逐屏抓图靠它对齐时序） */
+    @JavascriptInterface
+    public void scrollSettled(int cssY) {
+        activity.doScrollSettled(cssY);
+    }
 }

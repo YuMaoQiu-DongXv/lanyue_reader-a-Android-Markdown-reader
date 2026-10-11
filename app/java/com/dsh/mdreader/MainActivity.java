@@ -782,7 +782,7 @@ public final class MainActivity extends Activity implements AssetServer.DocSourc
     private final Exporter.Callback exportCallback = new Exporter.Callback() {
         @Override
         public void done(boolean ok, String msg, String shareUri) {
-            toast(msg);
+            // 只走页面内提示：原生 Toast 会与它同时出现，屏幕上会叠两个提示
             notifyWeb("export", ok, msg);
             web.post(() -> web.evaluateJavascript(
                     "(function(){try{return LanyueApp.exportFinished();}catch(e){return 0;}})()", null));
@@ -826,6 +826,10 @@ public final class MainActivity extends Activity implements AssetServer.DocSourc
 
     void doViewChanged(String view) {
         showingDoc = "doc".equals(view);
+    }
+
+    void doScrollSettled(int cssY) {
+        if (exporter != null) exporter.onScrollSettled(cssY);
     }
 
     void doOpenUrl(String url) {

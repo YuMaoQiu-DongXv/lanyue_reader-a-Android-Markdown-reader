@@ -370,3 +370,34 @@ classes.dex 在包内 ✓
 - 回归：渲染流水线 **77/77**、五宽度布局、首页几何 全部通过。
 
 **本轮 APK**：481 KB（492,807 字节），零权限不变。
+
+---
+
+## 17. 第五轮真机反馈修复（图片导出时序 + 提示生命周期）
+
+| # | 现象 | 根因 | 修复 |
+|---|---|---|---|
+| 1 | 导出后「已导出…」提示**永远不消失** | `app.js` 顶部是 `'use strict'`，而 `toastTimer` **只被赋值、从未声明** → `toastTimer = setTimeout(...)` 抛 `ReferenceError`；它前面的 `classList.add('show')` 已经执行，于是提示显示出来、定时器永远没挂上。**更糟的是这个异常会中断 `toast()` 之后的所有代码**（例如 `notify()` 里的状态复位） | 补上声明；回到前台时补一次收起（页面在后台时定时器会被冻结，例如停在系统打印界面）；导出提示只保留页面内那一条（原生 Toast 会与它叠成两个提示） |
+| 2 | 长图导出仍然只有开头一段有内容 | 上一轮修的是**单位换算**（确为真 bug）；本轮发现还有**时序问题**：Chromium 的合成是异步的，只按固定 130ms 延时抓，很容易抓到尚未重新合成的空白帧 | ① **滚动回执握手**：先 `armScrollAck(目标位置)` 再滚动，页面滚动后等两帧回执，收到才抓图（700ms 超时兜底）；② **空白帧检测与重试**：整屏同色则等 300/600ms 重抓，最多两次；③ **底部钳制重叠贴图**：滚到底时按实际位置贴图，避免末片重复最后一屏 |
+
+### 自证日志（复测时一眼定位）
+
+```
+LanyueExport: capture ranges=14 chunkH=12000px content=168000px vp=2400px
+              | vpCss=800 contentCss=56000 scrollCss=1200 scale=3.000 | mode=pages
+LanyueExport: tile 0.0 req=0 actual=0 ackCss=0 blank=0.412
+LanyueExport: tile 2.3 req=8400 actual=8400 ackCss=2800 blank=1.000 retry=1
+LanyueExport: chunk 1/14 lanyue-...-001.png bytes=2843117
+```
+
+判读方法：
+- `chunk N bytes=` —— **空白片的 PNG 只有几十 KB，有内容的通常几 MB**；
+- `tile x.y blank=1.000 retry=2` —— 重试两次仍是整屏同色，说明**抓图机制本身**有问题
+  （`View.draw()` 在硬件加速的 WebView 上不可靠），下一步应换 `PixelCopy` 或软件层抓图，
+  而不是继续调延时。
+
+### 本轮新增的测试能力
+
+`tools/rendertest/export.html` 增加 **toast 生命周期断言**（调用 `LanyueApp.toast()` 后必须无脚本错误、
+提示必须出现、2200ms 后必须消失）以及**全局 `error` 事件陷阱** —— 后者专门捕捉
+「严格模式下给未声明变量赋值」这类**只在被调用路径上才暴露的隐性中断**（本轮 bug 1 正是这一类）。

@@ -35,6 +35,14 @@ function run() {
   var win = document.getElementById('f').contentWindow;
   var doc = win.document;
 
+  // 全局错误陷阱：严格模式下"给未声明变量赋值"之类的问题会抛 ReferenceError，
+  // 而它只会出现在被调到的那条路径上 —— 这个陷阱就是用来抓这类"隐性中断"的。
+  if (win.__errTrap !== true) {
+    win.__errTrap = true;
+    win.__errors = [];
+    win.addEventListener('error', function (e) { win.__errors.push(String(e.message || e)); });
+  }
+
   // ---------- 收集全部 CSS 文本（含 @media print 内部）----------
   var allCss = '', pageRule = null, printRuleCount = 0;
   Array.prototype.forEach.call(doc.styleSheets, function (ss) {
@@ -87,10 +95,29 @@ function run() {
   var leftover = doc.documentElement.classList.contains('exporting');
   ok('exportFinished() 摘掉了 exporting 类', !leftover, doc.documentElement.className);
 
+  // ---------- 提示（toast）生命周期：出现过就必须自己消失 ----------
+  // 真机 bug：toastTimer 在严格模式下是"未声明就赋值"→ 抛 ReferenceError，
+  // 而 classList.add('show') 已经执行，于是提示永远挂在屏幕上。
+  try {
+    win.LanyueApp.toast('测试提示');
+  } catch (e) {
+    ok('toast() 不抛异常', false, String(e));
+  }
+  var tel = doc.getElementById('toast');
+  ok('toast() 后提示可见', tel.classList.contains('show'), 'class=' + tel.className);
+  var errsAfterToast = (win.__errors || []).length;
+  ok('toast() 没有触发任何脚本错误', errsAfterToast === 0,
+     (win.__errors || []).join(' | '));
+
   // ---------- 打印断页规则仍在（回归检查）----------
   ok('打印段仍声明了代码块/表格不跨页断开', /break-inside:\s*avoid/.test(allCss));
 
-  finish();
+  setTimeout(function () {
+    ok('提示会自动消失（2200ms 后）', !tel.classList.contains('show'), 'class=' + tel.className);
+    var errsFinal = (win.__errors || []).length;
+    ok('整轮没有出现任何未捕获脚本错误', errsFinal === 0, (win.__errors || []).join(' | '));
+    finish();
+  }, 2600);
 }
 
 function finish() {

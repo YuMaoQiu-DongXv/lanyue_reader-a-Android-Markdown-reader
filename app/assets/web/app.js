@@ -68,6 +68,7 @@
 
   /* ---------------- 状态 ---------------- */
   var state = null;
+  var toastTimer = 0;          // 提示自动收起的定时器（曾经漏了声明，严格模式下抛错 → 提示永不消失）
   var currentView = 'home';
   var exportingSince = 0;         // 进入"导出态"的时间戳（顶栏此时被 CSS 隐藏）
   var imageExportInFlight = false;      // 'home' | 'doc'：顶栏据此决定显示返回箭头还是应用名
@@ -1117,6 +1118,12 @@
       return true;
     },
     scrollToTop: function () { window.scrollTo({ top: 0, behavior: 'smooth' }); },
+    /** 抓图前布防滚动回执；若已经就在目标位置则立刻回执（否则不会有 scroll 事件） */
+    armScrollAck: function (targetCss) {
+      ackArmed = true;
+      if (Math.abs(window.scrollY - (targetCss || 0)) <= 2) ackScroll();
+      return true;
+    },
     savePositionNow: function () { savePosition(); return ''; },
     /** 原生导出结束（无论成败）：恢复固定顶栏 */
     exportFinished: function () {
@@ -1151,10 +1158,36 @@
     else if (k === 'act-close') closePanels();
   });
 
+  /* ---------------- 滚动回执（逐屏抓图握手） ----------------
+     Java 逐屏抓图时必须确认"页面已经在新位置产出画面"。Chromium 的合成是异步的，
+     只按固定延时抓，很容易抓到还没重新合成的空白帧 —— 真机 bug"长图只有第一格有内容"就是它。
+     所以：Java 先 armScrollAck(目标位置)，页面滚动后等两帧再回执，Java 收到回执才抓图。 */
+  var ackArmed = false, ackRAF = 0;
+  function ackScroll() {
+    if (ackRAF) cancelAnimationFrame(ackRAF);
+    ackRAF = requestAnimationFrame(function () {
+      ackRAF = requestAnimationFrame(function () {
+        ackRAF = 0;
+        try { if (B.scrollSettled) B.scrollSettled(Math.round(window.scrollY)); } catch (e) {}
+      });
+    });
+  }
+  window.addEventListener('scroll', function () {
+    if (!ackArmed) return;
+    ackArmed = false;
+    ackScroll();
+  }, { passive: true });
+
   // 兜底：从系统打印界面返回时，原生侧理论上会调 exportFinished()；
   // 万一没调到（不同 ROM 的返回路径不一致），这里自行恢复，避免"导航栏凭空消失"。
   document.addEventListener('visibilitychange', function () {
     if (document.hidden) return;
+    // 页面在后台时定时器会被冻结（例如停在系统打印界面时），回到前台补一次收起
+    var tel = $('toast');
+    if (tel && tel.classList.contains('show')) {
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(function () { tel.classList.remove('show'); }, 1200);
+    }
     if (exportingSince && !imageExportInFlight &&
         document.documentElement.classList.contains('exporting')) {
       document.documentElement.classList.remove('exporting');
